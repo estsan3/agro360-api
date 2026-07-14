@@ -46,6 +46,8 @@ class CrearViajeRequest(BaseModel):
     """Datos de un viaje al crearlo dentro de una campaña."""
 
     chofer_id: str | None = None
+    # Patente del camión para este viaje (puede diferir del dominio del catálogo).
+    dominio: str | None = Field(default=None, max_length=10)
     destino: str = Field(min_length=2, max_length=200)
     toneladas: float = Field(gt=0, le=100, description="Toneladas del viaje (máx. 100)")
     observaciones: str = ""

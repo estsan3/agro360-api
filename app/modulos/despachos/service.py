@@ -271,14 +271,19 @@ class DespachosService:
         self, datos: CrearViajeRequest, estado: str = "pendiente"
     ) -> Viaje:
         """Crea la entidad Viaje resolviendo el chofer contra catálogos."""
+        if not datos.chofer_id:
+            raise ReglaDeNegocioViolada("Debe seleccionar un chofer")
+
         viaje = Viaje(
             destino=datos.destino,
             toneladas=datos.toneladas,
             observaciones=datos.observaciones,
             estado=estado,
         )
-        if datos.chofer_id:
-            await self._asignar_chofer(viaje, datos.chofer_id)
+        await self._asignar_chofer(viaje, datos.chofer_id)
+        # La patente del viaje puede ser distinta al dominio del catálogo del chofer.
+        if datos.dominio:
+            viaje.dominio = datos.dominio.strip().upper()
         return viaje
 
     async def _asignar_chofer(self, viaje: Viaje, chofer_id: str) -> None:

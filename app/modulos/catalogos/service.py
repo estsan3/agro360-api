@@ -134,7 +134,10 @@ class CatalogosService:
         await self._sesion.commit()
 
     async def eliminar_material(self, material_id: str) -> None:
+        """Elimina por id o, si el front manda el nombre, lo resuelve por nombre."""
         material = await self._dao.buscar_material(material_id)
+        if material is None:
+            material = await self._dao.buscar_material_por_nombre(material_id)
         if material is None:
             raise RecursoNoEncontrado("Material no encontrado")
         await self._dao.eliminar(material)
