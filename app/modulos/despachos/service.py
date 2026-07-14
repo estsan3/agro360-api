@@ -50,15 +50,7 @@ class DespachosService:
 
     async def crear(self, datos: CrearDespachoRequest) -> DespachoResponse:
         """Crea una campaña (borrador o directamente activa)."""
-        # Validación de referencias contra el contrato de catálogos.
-        if not await self._catalogos.existe_productor_con_campo(
-            datos.productor_id, datos.campo_id
-        ):
-            raise ReglaDeNegocioViolada(
-                "El campo indicado no existe o no pertenece a ese productor"
-            )
-        if not await self._catalogos.existe_material(datos.material):
-            raise ReglaDeNegocioViolada(f"Material desconocido: {datos.material}")
+        await self._validar_referencias(datos)
 
         despacho = Despacho(
             nombre=datos.nombre,
@@ -74,13 +66,14 @@ class DespachosService:
         )
         self._bo.validar_fechas(despacho)
 
-        # Alta de los viajes iniciales de la campaña.
+        # Alta de los viajes iniciales: nacen en borrador junto con la campaña.
         for datos_viaje in datos.viajes:
-            despacho.viajes.append(await self._construir_viaje(datos_viaje))
+            despacho.viajes.append(
+                await self._construir_viaje(datos_viaje, estado="borrador")
+            )
 
-        if datos.activar:
-            self._bo.validar_activacion(despacho)
-            despacho.estado = "activo"
+        if datos.estado == "activo":
+            self._bo.activar(despacho)
 
         await self._dao.guardar(despacho)
         await self._sesion.commit()
@@ -92,11 +85,50 @@ class DespachosService:
             await self._publicar_activacion(despacho)
         return DespachoResponse.model_validate(despacho)
 
+    async def actualizar(
+        self, despacho_id: str, datos: CrearDespachoRequest
+    ) -> DespachoResponse:
+        """Edición de una campaña en borrador (el front reenvía el formulario).
+
+        Los viajes se reemplazan por los del payload (en borrador todos los
+        viajes son editables). Con `estado="activo"` además se envía.
+        """
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_edicion(despacho)
+        await self._validar_referencias(datos)
+
+        despacho.nombre = datos.nombre
+        despacho.productor_id = datos.productor_id
+        despacho.campo_id = datos.campo_id
+        despacho.origen = datos.origen
+        despacho.entrada_campo = datos.entrada_campo
+        despacho.material = datos.material
+        despacho.administrador_id = datos.administrador_id
+        despacho.vendedor_id = datos.vendedor_id
+        despacho.fecha_inicio = datos.fecha_inicio
+        despacho.fecha_llegada_estimada = datos.fecha_llegada_estimada
+        self._bo.validar_fechas(despacho)
+
+        despacho.viajes.clear()
+        for datos_viaje in datos.viajes:
+            despacho.viajes.append(
+                await self._construir_viaje(datos_viaje, estado="borrador")
+            )
+
+        if datos.estado == "activo":
+            self._bo.activar(despacho)
+
+        await self._sesion.commit()
+        await self._sesion.refresh(despacho, attribute_names=["viajes"])
+
+        if despacho.estado == "activo":
+            await self._publicar_activacion(despacho)
+        return DespachoResponse.model_validate(despacho)
+
     async def activar(self, despacho_id: str) -> DespachoResponse:
         """Pasa una campaña de borrador a activa ("Enviar" en el front)."""
         despacho = await self._buscar_o_fallar(despacho_id)
-        self._bo.validar_activacion(despacho)
-        despacho.estado = "activo"
+        self._bo.activar(despacho)
         await self._sesion.commit()
         await self._publicar_activacion(despacho)
         return DespachoResponse.model_validate(despacho)
@@ -114,7 +146,59 @@ class DespachosService:
         self, despacho_id: str, datos: CrearViajeRequest
     ) -> DespachoResponse:
         despacho = await self._buscar_o_fallar(despacho_id)
-        despacho.viajes.append(await self._construir_viaje(datos))
+        # En campaña borrador el viaje nace borrador; en activa, pendiente.
+        estado = "borrador" if despacho.estado == "borrador" else "pendiente"
+        despacho.viajes.append(await self._construir_viaje(datos, estado=estado))
+        await self._sesion.commit()
+        return DespachoResponse.model_validate(despacho)
+
+    async def iniciar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
+        """El viaje sale a la ruta: pasa a en_viaje."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        self._bo.validar_inicio_viaje(viaje)
+        self._bo.aplicar_estado_viaje(viaje, "en_viaje")
+        await self._sesion.commit()
+
+        # Mensajería escucha este evento para abrir/vincular el chat del chofer.
+        await bus_eventos.publicar(
+            EventoDominio(
+                nombre="despachos.viaje.iniciado",
+                datos={
+                    "despacho_id": despacho.id,
+                    "viaje_id": viaje.id,
+                    "chofer_id": viaje.chofer_id,
+                    "origen": despacho.origen,
+                    "destino": viaje.destino,
+                },
+            )
+        )
+        return DespachoResponse.model_validate(despacho)
+
+    async def duplicar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
+        """Copia un viaje (mismo chofer/destino/toneladas) listo para salir."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        original = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+
+        copia = Viaje(
+            chofer_id=original.chofer_id,
+            chofer_nombre=original.chofer_nombre,
+            dominio=original.dominio,
+            destino=original.destino,
+            toneladas=original.toneladas,
+            observaciones=original.observaciones,
+            estado="borrador" if despacho.estado == "borrador" else "pendiente",
+        )
+        despacho.viajes.append(copia)
+        await self._sesion.commit()
+        return DespachoResponse.model_validate(despacho)
+
+    async def eliminar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
+        """Elimina un viaje que todavía no salió a la ruta."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        self._bo.validar_eliminacion_viaje(viaje)
+        despacho.viajes.remove(viaje)
         await self._sesion.commit()
         return DespachoResponse.model_validate(despacho)
 
@@ -166,12 +250,32 @@ class DespachosService:
             raise RecursoNoEncontrado("Campaña de despacho no encontrada")
         return despacho
 
-    async def _construir_viaje(self, datos: CrearViajeRequest) -> Viaje:
+    async def _buscar_viaje_o_fallar(self, despacho_id: str, viaje_id: str) -> Viaje:
+        viaje = await self._dao.buscar_viaje(despacho_id, viaje_id)
+        if viaje is None:
+            raise RecursoNoEncontrado("Viaje no encontrado en esa campaña")
+        return viaje
+
+    async def _validar_referencias(self, datos: CrearDespachoRequest) -> None:
+        """Valida productor/campo/material contra el contrato de catálogos."""
+        if not await self._catalogos.existe_productor_con_campo(
+            datos.productor_id, datos.campo_id
+        ):
+            raise ReglaDeNegocioViolada(
+                "El campo indicado no existe o no pertenece a ese productor"
+            )
+        if not await self._catalogos.existe_material(datos.material):
+            raise ReglaDeNegocioViolada(f"Material desconocido: {datos.material}")
+
+    async def _construir_viaje(
+        self, datos: CrearViajeRequest, estado: str = "pendiente"
+    ) -> Viaje:
         """Crea la entidad Viaje resolviendo el chofer contra catálogos."""
         viaje = Viaje(
             destino=datos.destino,
             toneladas=datos.toneladas,
             observaciones=datos.observaciones,
+            estado=estado,
         )
         if datos.chofer_id:
             await self._asignar_chofer(viaje, datos.chofer_id)

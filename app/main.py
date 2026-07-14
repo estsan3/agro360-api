@@ -18,6 +18,7 @@ from app.core.config import obtener_configuracion
 from app.core.database import crear_tablas
 from app.core.excepciones import ErrorDeNegocio, manejar_error_de_negocio
 from app.modulos.auth.router import router as auth_router
+from app.modulos.auth.router import router_usuarios, router_vendedores
 from app.modulos.cartas_porte.router import router as cartas_porte_router
 from app.modulos.catalogos.router import router as catalogos_router
 from app.modulos.despachos.router import router as despachos_router
@@ -81,6 +82,9 @@ def crear_aplicacion() -> FastAPI:
     # Un router por módulo, todos bajo /api/v1.
     prefijo = "/api/v1"
     app.include_router(auth_router, prefix=prefijo)
+    app.include_router(router_usuarios, prefix=prefijo)
+    # Antes que catálogos: /catalogos/vendedores debe matchear primero.
+    app.include_router(router_vendedores, prefix=prefijo)
     app.include_router(catalogos_router, prefix=prefijo)
     app.include_router(despachos_router, prefix=prefijo)
     app.include_router(mensajeria_router, prefix=prefijo)

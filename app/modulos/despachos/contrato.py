@@ -19,6 +19,7 @@ class ViajeResumen:
 
     id: str
     despacho_id: str
+    chofer_id: str | None
     chofer_nombre: str
     dominio: str
     destino: str
@@ -64,6 +65,7 @@ class DespachosLocal:
         return ViajeResumen(
             id=viaje.id,
             despacho_id=despacho.id,
+            chofer_id=viaje.chofer_id,
             chofer_nombre=viaje.chofer_nombre,
             dominio=viaje.dominio,
             destino=viaje.destino,

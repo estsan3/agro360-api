@@ -48,6 +48,9 @@ class CatalogosDAO:
         )
         return resultado.scalar_one_or_none()
 
+    async def buscar_material(self, material_id: str) -> Material | None:
+        return await self._sesion.get(Material, material_id)
+
     # ------------------------------- Choferes -------------------------------
 
     async def listar_choferes(self, solo_activos: bool = True) -> list[Chofer]:
@@ -65,4 +68,9 @@ class CatalogosDAO:
     async def guardar(self, entidad: object) -> None:
         """Agrega cualquier entidad del módulo a la sesión (commit en service)."""
         self._sesion.add(entidad)
+        await self._sesion.flush()
+
+    async def eliminar(self, entidad: object) -> None:
+        """Elimina la entidad de la sesión (commit en service)."""
+        await self._sesion.delete(entidad)
         await self._sesion.flush()

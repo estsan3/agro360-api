@@ -41,8 +41,18 @@ async def obtener(despacho_id: str, sesion: Sesion) -> DespachoResponse:
 
 @router.post("", response_model=DespachoResponse, status_code=201, operation_id="crear_despacho")
 async def crear(datos: CrearDespachoRequest, sesion: Sesion) -> DespachoResponse:
-    """Crea una campaña. Con `activar=true` queda operativa en un solo paso."""
+    """Crea una campaña. Con `estado="activo"` queda operativa en un solo paso."""
     return await DespachosService(sesion).crear(datos)
+
+
+@router.put(
+    "/{despacho_id}", response_model=DespachoResponse, operation_id="actualizar_despacho"
+)
+async def actualizar(
+    despacho_id: str, datos: CrearDespachoRequest, sesion: Sesion
+) -> DespachoResponse:
+    """Edita una campaña en borrador (reemplaza datos y viajes)."""
+    return await DespachosService(sesion).actualizar(despacho_id, datos)
 
 
 @router.post(
@@ -82,3 +92,34 @@ async def actualizar_viaje(
 ) -> DespachoResponse:
     """Actualiza un viaje: asignar chofer, cambiar estado, progreso u observaciones."""
     return await DespachosService(sesion).actualizar_viaje(despacho_id, viaje_id, datos)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/iniciar",
+    response_model=DespachoResponse,
+    operation_id="iniciar_viaje",
+)
+async def iniciar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
+    """El viaje sale a la ruta (pasa a en_viaje). Requiere chofer asignado."""
+    return await DespachosService(sesion).iniciar_viaje(despacho_id, viaje_id)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/duplicar",
+    response_model=DespachoResponse,
+    status_code=201,
+    operation_id="duplicar_viaje",
+)
+async def duplicar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
+    """Duplica un viaje (mismo chofer, destino y toneladas)."""
+    return await DespachosService(sesion).duplicar_viaje(despacho_id, viaje_id)
+
+
+@router.delete(
+    "/{despacho_id}/viajes/{viaje_id}",
+    response_model=DespachoResponse,
+    operation_id="eliminar_viaje",
+)
+async def eliminar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
+    """Elimina un viaje que todavía no salió a la ruta."""
+    return await DespachosService(sesion).eliminar_viaje(despacho_id, viaje_id)

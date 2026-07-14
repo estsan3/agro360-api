@@ -106,6 +106,156 @@ async def test_flujo_completo(cliente, auth_headers):
     assert kpis["toneladas_totales"] >= 30
 
 
+async def test_contrato_front(cliente, auth_headers):
+    """Verifica el contrato wire que consume el front Angular."""
+    # Catálogos base con nombres únicos (la base en memoria persiste).
+    productor = (
+        await cliente.post(
+            "/api/v1/catalogos/productores",
+            json={"nombre": "Productor Front", "campos": ["Campo Front"]},
+            headers=auth_headers,
+        )
+    ).json()
+    await cliente.post(
+        "/api/v1/catalogos/materiales",
+        json={"nombre": "Girasol"},
+        headers=auth_headers,
+    )
+    chofer = (
+        await cliente.post(
+            "/api/v1/catalogos/choferes",
+            json={"nombre": "Chofer Front", "dominio": "CD456EF", "modelo": "Scania R450"},
+            headers=auth_headers,
+        )
+    ).json()
+
+    # 1. GET /catalogos agregado: la forma exacta que espera el front.
+    catalogos = (await cliente.get("/api/v1/catalogos", headers=auth_headers)).json()
+    assert {"productores", "administradores", "vendedores", "materiales", "choferes"} <= set(
+        catalogos
+    )
+    assert "Girasol" in catalogos["materiales"]  # materiales como nombres
+    assert any(c["modelo"] == "Scania R450" for c in catalogos["choferes"])
+    assert any(u["nombre"] == "Admin Test" for u in catalogos["administradores"])
+
+    # 2. Crear campaña con estado (contrato del front) y viajes borrador.
+    despacho = (
+        await cliente.post(
+            "/api/v1/despachos",
+            json={
+                "nombre": "Campaña Front",
+                "productor_id": productor["id"],
+                "campo_id": productor["campos"][0]["id"],
+                "origen": "Salta Capital",
+                "material": "Girasol",
+                "administrador_id": "a-1",
+                "vendedor_id": "v-1",
+                "fecha_inicio": "2026-07-01",
+                "fecha_llegada_estimada": "2026-07-20",
+                "estado": "borrador",
+                "viajes": [
+                    {"chofer_id": chofer["id"], "destino": "Rosario", "toneladas": 30}
+                ],
+            },
+            headers=auth_headers,
+        )
+    ).json()
+    assert despacho["viajes"][0]["estado"] == "borrador"
+
+    # 3. PUT: editar el borrador y enviarlo (estado activo) en un paso.
+    respuesta = await cliente.put(
+        f"/api/v1/despachos/{despacho['id']}",
+        json={
+            "nombre": "Campaña Front (editada)",
+            "productor_id": productor["id"],
+            "campo_id": productor["campos"][0]["id"],
+            "origen": "Salta Capital",
+            "material": "Girasol",
+            "administrador_id": "a-1",
+            "vendedor_id": "v-1",
+            "fecha_inicio": "2026-07-01",
+            "fecha_llegada_estimada": "2026-07-20",
+            "estado": "activo",
+            "viajes": [
+                {"chofer_id": chofer["id"], "destino": "Rosario", "toneladas": 32}
+            ],
+        },
+        headers=auth_headers,
+    )
+    despacho = respuesta.json()
+    assert despacho["estado"] == "activo"
+    assert despacho["viajes"][0]["estado"] == "pendiente"  # promovido al activar
+    viaje_id = despacho["viajes"][0]["id"]
+
+    # 4. Duplicar e iniciar viajes (acciones de la pantalla de borradores).
+    despacho = (
+        await cliente.post(
+            f"/api/v1/despachos/{despacho['id']}/viajes/{viaje_id}/duplicar",
+            headers=auth_headers,
+        )
+    ).json()
+    assert len(despacho["viajes"]) == 2
+
+    despacho = (
+        await cliente.post(
+            f"/api/v1/despachos/{despacho['id']}/viajes/{viaje_id}/iniciar",
+            headers=auth_headers,
+        )
+    ).json()
+    viaje = next(v for v in despacho["viajes"] if v["id"] == viaje_id)
+    assert viaje["estado"] == "en_viaje"
+
+    # 5. El evento del viaje iniciado abrió el chat del chofer con contexto.
+    conversaciones = (
+        await cliente.get("/api/v1/conversaciones", headers=auth_headers)
+    ).json()
+    conv = next(c for c in conversaciones if c["chofer"] == "Chofer Front")
+    assert conv["viaje_id"] == viaje_id
+    assert conv["estado_viaje"] == "en_viaje"
+    assert conv["en_linea"] is False
+
+    # 6. Enviar mensaje devuelve el mensaje creado (no la conversación).
+    mensaje = (
+        await cliente.post(
+            f"/api/v1/conversaciones/{conv['id']}/mensajes",
+            json={"texto": "¿Cómo vas?"},
+            headers=auth_headers,
+        )
+    ).json()
+    assert mensaje["autor"] == "admin"
+    assert mensaje["leido"] is True
+
+    # 7. Rutas de parámetros y preferencias a nivel raíz.
+    parametros = (await cliente.get("/api/v1/parametros", headers=auth_headers)).json()
+    assert "precio_por_tonelada" in parametros
+    preferencias = (
+        await cliente.get("/api/v1/preferencias", headers=auth_headers)
+    ).json()
+    assert "viaje_retrasado" in preferencias
+
+    # 8. Gestión de usuarios en /usuarios (con baja).
+    usuario = (
+        await cliente.post(
+            "/api/v1/usuarios",
+            json={
+                "nombre": "Vendedor Baja",
+                "dni": "99887766",
+                "email": "baja@test.com",
+                "rol": "vendedor",
+            },
+            headers=auth_headers,
+        )
+    ).json()
+    respuesta = await cliente.delete(
+        f"/api/v1/usuarios/{usuario['id']}", headers=auth_headers
+    )
+    assert respuesta.status_code == 204
+
+    # 9. Logout responde 204 (el front descarta el token).
+    respuesta = await cliente.post("/api/v1/auth/logout", headers=auth_headers)
+    assert respuesta.status_code == 204
+
+
 async def test_activar_campania_sin_viajes_falla(cliente, auth_headers):
     """Regla de negocio: no se activa una campaña sin viajes."""
     productor = (

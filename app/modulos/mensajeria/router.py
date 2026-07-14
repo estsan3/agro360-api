@@ -9,13 +9,13 @@ from app.core.database import obtener_sesion
 from app.core.dependencias import obtener_usuario_actual
 from app.modulos.mensajeria.schemas import (
     ConversacionResponse,
-    ConversacionResumenResponse,
     EnviarMensajeRequest,
+    MensajeResponse,
 )
 from app.modulos.mensajeria.service import MensajeriaService
 
+# Sin prefijo de módulo: el front consume /conversaciones directo.
 router = APIRouter(
-    prefix="/mensajeria",
     tags=["Mensajería"],
     dependencies=[Depends(obtener_usuario_actual)],
 )
@@ -25,11 +25,11 @@ Sesion = Annotated[AsyncSession, Depends(obtener_sesion)]
 
 @router.get(
     "/conversaciones",
-    response_model=list[ConversacionResumenResponse],
+    response_model=list[ConversacionResponse],
     operation_id="listar_conversaciones",
 )
-async def listar_conversaciones(sesion: Sesion) -> list[ConversacionResumenResponse]:
-    """Lista las conversaciones con choferes (las no leídas primero)."""
+async def listar_conversaciones(sesion: Sesion) -> list[ConversacionResponse]:
+    """Lista las conversaciones completas (las no leídas primero)."""
     return await MensajeriaService(sesion).listar_conversaciones()
 
 
@@ -45,14 +45,14 @@ async def obtener_conversacion(conversacion_id: str, sesion: Sesion) -> Conversa
 
 @router.post(
     "/conversaciones/{conversacion_id}/mensajes",
-    response_model=ConversacionResponse,
+    response_model=MensajeResponse,
     status_code=201,
     operation_id="enviar_mensaje",
 )
 async def enviar_mensaje(
     conversacion_id: str, datos: EnviarMensajeRequest, sesion: Sesion
-) -> ConversacionResponse:
-    """Envía un mensaje del admin al chofer."""
+) -> MensajeResponse:
+    """Envía un mensaje del admin al chofer y devuelve el mensaje creado."""
     return await MensajeriaService(sesion).enviar_mensaje(conversacion_id, datos)
 
 

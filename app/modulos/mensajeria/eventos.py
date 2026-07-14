@@ -12,6 +12,23 @@ from app.modulos.despachos.dao import DespachoDAO
 from app.modulos.mensajeria.service import MensajeriaService
 
 
+async def _al_iniciar_viaje(evento: EventoDominio) -> None:
+    """Abre (si hace falta) y vincula el chat del chofer al viaje que sale."""
+    chofer_id = evento.datos.get("chofer_id")
+    if chofer_id is None:
+        return
+    async with fabrica_sesiones() as sesion:
+        service = MensajeriaService(sesion)
+        await service.iniciar_conversacion(chofer_id)
+        await service.vincular_viaje(
+            chofer_id=chofer_id,
+            despacho_id=evento.datos["despacho_id"],
+            viaje_id=evento.datos["viaje_id"],
+            origen=evento.datos["origen"],
+            destino=evento.datos["destino"],
+        )
+
+
 async def _al_cambiar_estado_viaje(evento: EventoDominio) -> None:
     """Inserta un aviso de sistema en el chat del chofer del viaje afectado.
 
@@ -35,5 +52,6 @@ async def _al_cambiar_estado_viaje(evento: EventoDominio) -> None:
 
 def registrar_suscripciones() -> None:
     """Registra los manejadores en el bus. Se llama una vez desde main.py."""
+    bus_eventos.suscribir("despachos.viaje.iniciado", _al_iniciar_viaje)
     bus_eventos.suscribir("despachos.viaje.completado", _al_cambiar_estado_viaje)
     bus_eventos.suscribir("despachos.viaje.retrasado", _al_cambiar_estado_viaje)

@@ -10,8 +10,9 @@ from app.core.dependencias import obtener_usuario_actual, requerir_rol
 from app.modulos.parametros.schemas import ParametrosNegocio, PreferenciasNotificacion
 from app.modulos.parametros.service import ParametrosService
 
+# Sin prefijo de módulo: el front consume /parametros y /preferencias
+# como recursos de primer nivel.
 router = APIRouter(
-    prefix="/parametros",
     tags=["Parámetros"],
     dependencies=[Depends(obtener_usuario_actual)],
 )
@@ -19,14 +20,14 @@ router = APIRouter(
 Sesion = Annotated[AsyncSession, Depends(obtener_sesion)]
 
 
-@router.get("/negocio", response_model=ParametrosNegocio, operation_id="obtener_parametros")
+@router.get("/parametros", response_model=ParametrosNegocio, operation_id="obtener_parametros")
 async def obtener_negocio(sesion: Sesion) -> ParametrosNegocio:
     """Devuelve los parámetros comerciales (precio por tonelada, moneda)."""
     return await ParametrosService(sesion).obtener_negocio()
 
 
 @router.put(
-    "/negocio",
+    "/parametros",
     response_model=ParametrosNegocio,
     dependencies=[Depends(requerir_rol("administrador"))],
     operation_id="guardar_parametros",

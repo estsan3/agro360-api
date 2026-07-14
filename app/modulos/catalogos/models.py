@@ -61,5 +61,7 @@ class Chofer(Base):
     nombre: Mapped[str] = mapped_column(String(120))
     # Dominio (patente) del camión habitual del chofer.
     dominio: Mapped[str] = mapped_column(String(10))
+    # Modelo del camión (ej: "Scania R450"); dato informativo para el front.
+    modelo: Mapped[str] = mapped_column(String(80), default="")
     cuit: Mapped[str | None] = mapped_column(String(13), nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)

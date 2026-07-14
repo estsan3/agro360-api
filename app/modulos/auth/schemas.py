@@ -32,10 +32,25 @@ class LoginResponse(BaseModel):
 
 
 class CrearUsuarioRequest(BaseModel):
-    """Alta de un usuario del backoffice."""
+    """Alta de un usuario del backoffice.
+
+    La contraseña es opcional: si no se envía (caso del front admin),
+    se asigna la contraseña inicial de demo y el usuario deberá
+    cambiarla en su primer ingreso (pendiente de implementar).
+    """
 
     nombre: str = Field(min_length=2, max_length=120)
     dni: str = Field(min_length=6, max_length=20)
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str | None = Field(default=None, min_length=8)
     rol: str = Field(pattern="^(administrador|vendedor)$")
+
+
+class CrearVendedorRequest(BaseModel):
+    """Alta rápida de vendedor desde la pantalla de catálogos del front.
+
+    Solo pide el nombre: email y DNI se generan como provisorios hasta
+    que el vendedor se complete como usuario pleno.
+    """
+
+    nombre: str = Field(min_length=2, max_length=120)

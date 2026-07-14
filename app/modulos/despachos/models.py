@@ -69,7 +69,7 @@ class Viaje(Base):
     destino: Mapped[str] = mapped_column(String(200))
     toneladas: Mapped[float] = mapped_column(Float)
 
-    # Estados: "pendiente" | "en_viaje" | "retrasado" | "completado".
+    # Estados: "borrador" | "pendiente" | "en_viaje" | "retrasado" | "completado".
     estado: Mapped[str] = mapped_column(String(20), default="pendiente")
     # Avance del viaje: 0 a 100.
     progreso: Mapped[int] = mapped_column(Integer, default=0)

@@ -47,11 +47,14 @@ class AuthService:
         existente = await self._dao.buscar_por_email(datos.email)
         self._bo.validar_alta(email_ya_registrado=existente is not None, rol=datos.rol)
 
+        # El front admin da de alta usuarios sin definirles contraseña:
+        # se asigna una inicial conocida hasta implementar la invitación por email.
+        password = datos.password or "cambiar12345"
         usuario = Usuario(
             nombre=datos.nombre,
             dni=datos.dni,
             email=datos.email,
-            password_hash=hashear_password(datos.password),
+            password_hash=hashear_password(password),
             rol=datos.rol,
         )
         await self._dao.guardar(usuario)
@@ -61,6 +64,42 @@ class AuthService:
     async def listar_usuarios(self) -> list[UsuarioResponse]:
         usuarios = await self._dao.listar()
         return [UsuarioResponse.model_validate(u) for u in usuarios]
+
+    async def crear_vendedor(self, nombre: str) -> UsuarioResponse:
+        """Alta rápida de vendedor (desde catálogos del front).
+
+        Se crea como usuario con rol vendedor y credenciales provisorias;
+        cuando tenga que loguearse, un admin le completa email y contraseña.
+        """
+        import uuid
+
+        sufijo = uuid.uuid4().hex[:8]
+        usuario = Usuario(
+            nombre=nombre,
+            dni="-",
+            email=f"vendedor-{sufijo}@pendiente.agro360",
+            password_hash=hashear_password(f"provisoria-{sufijo}"),
+            rol="vendedor",
+        )
+        await self._dao.guardar(usuario)
+        await self._sesion.commit()
+        return UsuarioResponse.model_validate(usuario)
+
+    async def eliminar_usuario(self, usuario_id: str, solicitante_id: str) -> None:
+        """Baja de un usuario del backoffice."""
+        usuario = await self._dao.buscar_por_id(usuario_id)
+        if usuario is None:
+            raise RecursoNoEncontrado("Usuario no encontrado")
+
+        administradores = await self._dao.listar_por_rol("administrador")
+        self._bo.validar_baja(
+            es_el_mismo_usuario=usuario.id == solicitante_id,
+            es_ultimo_administrador=(
+                usuario.rol == "administrador" and len(administradores) <= 1
+            ),
+        )
+        await self._dao.eliminar(usuario)
+        await self._sesion.commit()
 
     async def obtener_usuario(self, usuario_id: str) -> UsuarioResponse:
         usuario = await self._dao.buscar_por_id(usuario_id)

@@ -6,7 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 EstadoDespacho = Literal["borrador", "activo"]
-EstadoViaje = Literal["pendiente", "en_viaje", "retrasado", "completado"]
+# "borrador": viaje de una campaña aún no enviada (editable/eliminable).
+EstadoViaje = Literal["borrador", "pendiente", "en_viaje", "retrasado", "completado"]
 
 
 class ViajeResponse(BaseModel):
@@ -51,7 +52,10 @@ class CrearViajeRequest(BaseModel):
 
 
 class CrearDespachoRequest(BaseModel):
-    """Alta de una campaña; nace en estado borrador salvo que se indique activar."""
+    """Alta o edición de una campaña.
+
+    El front envía `estado`: "borrador" (guardar) o "activo" (enviar).
+    """
 
     nombre: str = Field(min_length=2, max_length=120)
     productor_id: str
@@ -64,8 +68,7 @@ class CrearDespachoRequest(BaseModel):
     fecha_inicio: date
     fecha_llegada_estimada: date
     viajes: list[CrearViajeRequest] = []
-    # true = crear y activar en un solo paso ("Enviar" en el front).
-    activar: bool = False
+    estado: EstadoDespacho = "borrador"
 
 
 class ActualizarViajeRequest(BaseModel):

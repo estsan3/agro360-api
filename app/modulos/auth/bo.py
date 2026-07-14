@@ -31,3 +31,10 @@ class UsuarioBO:
             raise ReglaDeNegocioViolada("Ya existe un usuario con ese email")
         if rol not in ROLES_VALIDOS:
             raise ReglaDeNegocioViolada(f"Rol inválido: {rol}")
+
+    def validar_baja(self, es_el_mismo_usuario: bool, es_ultimo_administrador: bool) -> None:
+        """Reglas para dar de baja un usuario."""
+        if es_el_mismo_usuario:
+            raise ReglaDeNegocioViolada("No podés darte de baja a vos mismo")
+        if es_ultimo_administrador:
+            raise ReglaDeNegocioViolada("No se puede eliminar al último administrador")

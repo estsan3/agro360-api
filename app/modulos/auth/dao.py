@@ -26,6 +26,17 @@ class UsuarioDAO:
         resultado = await self._sesion.execute(select(Usuario).order_by(Usuario.nombre))
         return list(resultado.scalars())
 
+    async def listar_por_rol(self, rol: str) -> list[Usuario]:
+        resultado = await self._sesion.execute(
+            select(Usuario).where(Usuario.rol == rol).order_by(Usuario.nombre)
+        )
+        return list(resultado.scalars())
+
+    async def eliminar(self, usuario: Usuario) -> None:
+        """Elimina el usuario de la sesión. El commit lo hace la capa service."""
+        await self._sesion.delete(usuario)
+        await self._sesion.flush()
+
     async def guardar(self, usuario: Usuario) -> Usuario:
         """Agrega el usuario a la sesión. El commit lo hace la capa service."""
         self._sesion.add(usuario)
