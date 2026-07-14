@@ -1,0 +1,57 @@
+[tool.poetry]
+name = "agro360-api"
+version = "0.1.0"
+description = "Backend modular de Agro360: gestión logística de despachos de granos (FastAPI)"
+authors = ["Agro360"]
+readme = "README.md"
+packages = [{ include = "app" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115"
+uvicorn = { extras = ["standard"], version = "^0.34" }
+sqlalchemy = { extras = ["asyncio"], version = "^2.0" }
+# Requerido por SQLAlchemy async (no siempre lo resuelve el extra en macOS).
+greenlet = "^3.1"
+aiosqlite = "^0.20"
+pydantic = "^2.9"
+pydantic-settings = "^2.6"
+# Validación de EmailStr en los schemas Pydantic.
+email-validator = "^2.2"
+pyjwt = "^2.10"
+bcrypt = "^4.2"
+
+# Driver de PostgreSQL (usado por docker-compose; en dev local puede seguirse con SQLite).
+asyncpg = "^0.30"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-asyncio = "^0.24"
+httpx = "^0.28"
+# Ejecuta el lifespan de la app en los tests (crear tablas, suscripciones).
+asgi-lifespan = "^2.1"
+ruff = "^0.8"
+
+[tool.poetry.group.mcp]
+# Grupo opcional: expone la API como servidor MCP para agentes de IA.
+# Instalar con: poetry install --with mcp
+optional = true
+
+[tool.poetry.group.mcp.dependencies]
+fastapi-mcp = "^0.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/F: errores y pyflakes. I: orden de imports. UP: modernización de sintaxis.
+select = ["E", "F", "I", "UP"]

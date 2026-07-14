@@ -1,0 +1,39 @@
+# Entorno de desarrollo con Docker.
+#   docker compose up --build
+# La API queda en http://localhost:8000 (docs en /docs).
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      AGRO360_ENTORNO: dev
+      # Conexión al servicio `db` (Postgres) por la red interna de compose.
+      AGRO360_DATABASE_URL: postgresql+asyncpg://agro360:agro360@db:5432/agro360
+      AGRO360_JWT_SECRETO: secreto-solo-para-desarrollo
+      AGRO360_CORS_ORIGINS: http://localhost:4200
+      AGRO360_SEED_AL_INICIAR: "true"
+    depends_on:
+      db:
+        # Espera a que Postgres acepte conexiones antes de arrancar la API.
+        condition: service_healthy
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: agro360
+      POSTGRES_PASSWORD: agro360
+      POSTGRES_DB: agro360
+    ports:
+      # Expuesto al host para inspeccionar la base con psql/DBeaver.
+      - "5432:5432"
+    volumes:
+      - agro360-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agro360 -d agro360"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  agro360-pgdata:
