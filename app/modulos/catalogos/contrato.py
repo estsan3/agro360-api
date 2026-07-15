@@ -52,4 +52,11 @@ class CatalogosLocal:
         chofer = await self._dao.buscar_chofer(chofer_id)
         if chofer is None:
             return None
-        return ChoferResumen(id=chofer.id, nombre=chofer.nombre, dominio=chofer.dominio)
+        dominio = chofer.dominio or ""
+        if not dominio and chofer.transportista_id:
+            transportista = await self._dao.buscar_transportista(chofer.transportista_id)
+            if transportista and transportista.camiones:
+                activos = [c for c in transportista.camiones if c.activo]
+                if activos:
+                    dominio = activos[0].dominio
+        return ChoferResumen(id=chofer.id, nombre=chofer.nombre, dominio=dominio)

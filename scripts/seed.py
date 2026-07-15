@@ -41,10 +41,10 @@ _PRODUCTORES = [
 _MATERIALES = [("Soja", 23), ("Maíz", 2), ("Girasol", 27), ("Trigo", 1)]
 
 _CHOFERES = [
-    ("ch-1", "Carlos Ruiz", "AA123BB", "Mercedes 1114"),
-    ("ch-2", "Miguel Torres", "EF789GH", "Volvo FH 420"),
-    ("ch-3", "Roberto Gómez", "BC456CD", "Scania R450"),
-    ("ch-4", "Pedro Ramírez", "XY789ZA", "Iveco Tector 170"),
+    ("ch-1", "Carlos Ruiz", "t-1"),
+    ("ch-2", "Miguel Torres", "t-1"),
+    ("ch-3", "Roberto Gómez", "t-2"),
+    ("ch-4", "Pedro Ramírez", "t-2"),
 ]
 
 # Empresas de transporte con flota (patentes alineadas a los choferes seed).
@@ -274,12 +274,6 @@ async def sembrar_datos_demo() -> None:
         sesion.add_all(
             [Material(nombre=n, codigo_grano_afip=c) for n, c in _MATERIALES]
         )
-        # Choferes indexados por nombre para resolver los viajes del mock.
-        choferes = {
-            nombre: Chofer(id=id_, nombre=nombre, dominio=dominio, modelo=modelo)
-            for id_, nombre, dominio, modelo in _CHOFERES
-        }
-        sesion.add_all(choferes.values())
         sesion.add_all(
             [
                 Transportista(
@@ -294,6 +288,12 @@ async def sembrar_datos_demo() -> None:
                 for tid, nombre, cuit, camiones in _TRANSPORTISTAS
             ]
         )
+        await sesion.flush()
+        choferes = {
+            nombre: Chofer(id=id_, nombre=nombre, transportista_id=tid)
+            for id_, nombre, tid in _CHOFERES
+        }
+        sesion.add_all(choferes.values())
         await sesion.flush()
 
         # Despachos con sus viajes (los IDs y estados son los del mock).
@@ -327,9 +327,18 @@ async def sembrar_datos_demo() -> None:
         for (id_, chofer_id, despacho_id, viaje_id, origen, destino, no_leidos,
              mensajes) in _CONVERSACIONES:
             chofer = next(c for c in choferes.values() if c.id == chofer_id)
+            dominio_conv = next(
+                (
+                    dominio
+                    for tid, _, _, camiones in _TRANSPORTISTAS
+                    if tid == chofer.transportista_id
+                    for _, dominio, _ in camiones
+                ),
+                "",
+            )
             conversacion = Conversacion(
                 id=id_, chofer_id=chofer.id, chofer_nombre=chofer.nombre,
-                dominio=chofer.dominio, despacho_id=despacho_id, viaje_id=viaje_id,
+                dominio=dominio_conv, despacho_id=despacho_id, viaje_id=viaje_id,
                 origen=origen, destino=destino, no_leidos=no_leidos,
             )
             sesion.add(conversacion)

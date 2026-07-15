@@ -14,6 +14,7 @@ from app.modulos.catalogos.schemas import (
     ChoferResponse,
     CrearCamionRequest,
     CrearCampoRequest,
+    CrearChoferEnTransportistaRequest,
     CrearChoferRequest,
     CrearMaterialRequest,
     CrearProductorRequest,
@@ -205,6 +206,24 @@ async def eliminar_camion(
 ) -> None:
     """Baja lógica de un camión. Solo administradores."""
     await CatalogosService(sesion).eliminar_camion(transportista_id, camion_id)
+
+
+@router.post(
+    "/transportistas/{transportista_id}/choferes",
+    response_model=ChoferResponse,
+    status_code=201,
+    dependencies=[Depends(requerir_rol("administrador"))],
+    operation_id="crear_chofer_en_transportista",
+)
+async def crear_chofer_en_transportista(
+    transportista_id: str,
+    datos: CrearChoferEnTransportistaRequest,
+    sesion: Sesion,
+) -> ChoferResponse:
+    """Da de alta un chofer en una empresa de transporte. Solo administradores."""
+    return await CatalogosService(sesion).crear_chofer_en_transportista(
+        transportista_id, datos.nombre, datos.cuit
+    )
 
 
 # --------------------------------- Bajas ---------------------------------

@@ -60,3 +60,31 @@ async def test_transportistas_crud_y_catalogos_agregados(
     ).json()
     t = next(x for x in listado if x["id"] == tid)
     assert t["camiones"][0]["activo"] is False
+
+
+@pytest.mark.asyncio
+async def test_chofer_vinculado_a_transportista(
+    cliente: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    transportista = (
+        await cliente.post(
+            "/api/v1/catalogos/transportistas",
+            headers=auth_headers,
+            json={"nombre": "Flota Chofer Test"},
+        )
+    ).json()
+    tid = transportista["id"]
+
+    chofer = (
+        await cliente.post(
+            f"/api/v1/catalogos/transportistas/{tid}/choferes",
+            headers=auth_headers,
+            json={"nombre": "Juan Chofer"},
+        )
+    ).json()
+    assert chofer["transportista_id"] == tid
+
+    catalogos = (await cliente.get("/api/v1/catalogos", headers=auth_headers)).json()
+    agg = next(c for c in catalogos["choferes"] if c["id"] == chofer["id"])
+    assert agg["transportista_id"] == tid
+    assert agg["camiones"] == []

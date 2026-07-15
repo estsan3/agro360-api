@@ -53,6 +53,7 @@ class CatalogosService:
         transportistas = await self._dao.listar_transportistas()
         administradores = await self._auth.listar_por_rol("administrador")
         vendedores = await self._auth.listar_por_rol("vendedor")
+        transportistas_por_id = {t.id: t for t in transportistas}
 
         return CatalogosAgregadosResponse(
             productores=[ProductorResponse.model_validate(p) for p in productores],
@@ -64,18 +65,16 @@ class CatalogosService:
             ],
             materiales=[m.nombre for m in materiales],
             choferes=[
-                ChoferAgregadoResponse(
-                    id=c.id, nombre=c.nombre, dominio=c.dominio, modelo=c.modelo
-                )
-                for c in choferes
+                self._chofer_agregado(c, transportistas_por_id) for c in choferes
             ],
             transportistas=[
                 TransportistaAgregadoResponse(
                     id=t.id,
                     nombre=t.nombre,
-                    camiones=[
-                        CamionAgregadoResponse(id=c.id, dominio=c.dominio, modelo=c.modelo)
-                        for c in t.camiones
+                    camiones=self._camiones_agregados(t),
+                    choferes=[
+                        self._chofer_agregado(c, transportistas_por_id)
+                        for c in t.choferes
                         if c.activo
                     ],
                 )
@@ -135,14 +134,35 @@ class CatalogosService:
         return [ChoferResponse.model_validate(c) for c in choferes]
 
     async def crear_chofer(self, datos: CrearChoferRequest) -> ChoferResponse:
-        dominio = self._bo.validar_dominio(datos.dominio)
+        transportista = await self._dao.buscar_transportista(datos.transportista_id)
+        if transportista is None:
+            raise RecursoNoEncontrado("Transportista no encontrado")
 
         chofer = Chofer(
-            nombre=datos.nombre, dominio=dominio, modelo=datos.modelo, cuit=datos.cuit
+            nombre=datos.nombre,
+            transportista_id=datos.transportista_id,
+            cuit=datos.cuit,
         )
+        if datos.dominio:
+            dominio = self._bo.validar_dominio(datos.dominio)
+            existente = await self._dao.buscar_camion_por_dominio(dominio)
+            if existente is None:
+                transportista.camiones.append(
+                    Camion(dominio=dominio, modelo=datos.modelo or "")
+                )
+            chofer.dominio = dominio
+            chofer.modelo = datos.modelo or ""
+
         await self._dao.guardar(chofer)
         await self._sesion.commit()
         return ChoferResponse.model_validate(chofer)
+
+    async def crear_chofer_en_transportista(
+        self, transportista_id: str, nombre: str, cuit: str | None = None
+    ) -> ChoferResponse:
+        return await self.crear_chofer(
+            CrearChoferRequest(nombre=nombre, transportista_id=transportista_id, cuit=cuit)
+        )
 
     # ------------------------- Transportistas / Camiones -------------------------
 
@@ -189,6 +209,8 @@ class CatalogosService:
         transportista.activo = False
         for camion in transportista.camiones:
             camion.activo = False
+        for chofer in transportista.choferes:
+            chofer.activo = False
         await self._sesion.commit()
 
     async def agregar_camion(
@@ -267,3 +289,31 @@ class CatalogosService:
             raise RecursoNoEncontrado("Chofer no encontrado")
         chofer.activo = False
         await self._sesion.commit()
+
+    @staticmethod
+    def _camiones_agregados(transportista: Transportista) -> list[CamionAgregadoResponse]:
+        return [
+            CamionAgregadoResponse(id=c.id, dominio=c.dominio, modelo=c.modelo)
+            for c in transportista.camiones
+            if c.activo
+        ]
+
+    def _chofer_agregado(
+        self, chofer: Chofer, transportistas: dict[str, Transportista]
+    ) -> ChoferAgregadoResponse:
+        transportista = (
+            transportistas.get(chofer.transportista_id)
+            if chofer.transportista_id
+            else None
+        )
+        camiones = self._camiones_agregados(transportista) if transportista else []
+        dominio = chofer.dominio or (camiones[0].dominio if camiones else "")
+        modelo = chofer.modelo or (camiones[0].modelo if camiones else "")
+        return ChoferAgregadoResponse(
+            id=chofer.id,
+            nombre=chofer.nombre,
+            transportista_id=chofer.transportista_id,
+            dominio=dominio or "",
+            modelo=modelo or "",
+            camiones=camiones,
+        )

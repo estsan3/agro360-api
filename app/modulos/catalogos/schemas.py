@@ -46,8 +46,9 @@ class CrearMaterialRequest(BaseModel):
 class ChoferResponse(BaseModel):
     id: str
     nombre: str
-    dominio: str
-    modelo: str = ""
+    transportista_id: str | None = None
+    dominio: str | None = None
+    modelo: str | None = None
     cuit: str | None = None
     activo: bool
 
@@ -56,12 +57,19 @@ class ChoferResponse(BaseModel):
 
 class CrearChoferRequest(BaseModel):
     nombre: str = Field(min_length=2, max_length=120)
-    dominio: str = Field(min_length=6, max_length=10, description="Patente, ej: AA123BB")
-    modelo: str = Field(default="", max_length=80)
+    transportista_id: str = Field(description="Empresa de transporte del chofer")
     cuit: str | None = Field(default=None, max_length=13)
+    # Compat legacy: si se envía, también da de alta el camión en la flota.
+    dominio: str | None = Field(default=None, min_length=6, max_length=10)
+    modelo: str | None = Field(default=None, max_length=80)
 
 
 # --------------------------- Transportistas / Camiones ---------------------------
+
+
+class CrearChoferEnTransportistaRequest(BaseModel):
+    nombre: str = Field(min_length=2, max_length=120)
+    cuit: str | None = Field(default=None, max_length=13)
 
 
 class CamionResponse(BaseModel):
@@ -115,6 +123,19 @@ class TransportistaAgregadoResponse(BaseModel):
     id: str
     nombre: str
     camiones: list[CamionAgregadoResponse] = []
+    choferes: list["ChoferAgregadoResponse"] = []
+
+
+class ChoferAgregadoResponse(BaseModel):
+    """Forma del chofer dentro de la respuesta agregada (la que usa el front)."""
+
+    id: str
+    nombre: str
+    transportista_id: str | None = None
+    # Hint legacy para UIs que aún autocompletan patente (primera de la flota).
+    dominio: str = ""
+    modelo: str = ""
+    camiones: list[CamionAgregadoResponse] = []
 
 
 # ----------------------- Respuesta agregada /catalogos -----------------------
@@ -127,15 +148,6 @@ class PersonaResumenResponse(BaseModel):
 
     id: str
     nombre: str
-
-
-class ChoferAgregadoResponse(BaseModel):
-    """Forma del chofer dentro de la respuesta agregada (la que usa el front)."""
-
-    id: str
-    nombre: str
-    dominio: str
-    modelo: str = ""
 
 
 class CatalogosAgregadosResponse(BaseModel):

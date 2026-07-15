@@ -42,7 +42,11 @@ async def test_flujo_completo(cliente, auth_headers):
     chofer = (
         await cliente.post(
             "/api/v1/catalogos/choferes",
-            json={"nombre": "Chofer Test", "dominio": "AB123CD"},
+            json={
+                "nombre": "Chofer Test",
+                "transportista_id": "t-1",
+                "dominio": "AB123CD",
+            },
             headers=auth_headers,
         )
     ).json()
@@ -121,10 +125,22 @@ async def test_contrato_front(cliente, auth_headers):
         json={"nombre": "Girasol"},
         headers=auth_headers,
     )
+    transportista = (
+        await cliente.post(
+            "/api/v1/catalogos/transportistas",
+            json={"nombre": "Transporte Front"},
+            headers=auth_headers,
+        )
+    ).json()
     chofer = (
         await cliente.post(
             "/api/v1/catalogos/choferes",
-            json={"nombre": "Chofer Front", "dominio": "CD456EF", "modelo": "Scania R450"},
+            json={
+                "nombre": "Chofer Front",
+                "transportista_id": transportista["id"],
+                "dominio": "CD456EF",
+                "modelo": "Scania R450",
+            },
             headers=auth_headers,
         )
     ).json()
@@ -136,7 +152,11 @@ async def test_contrato_front(cliente, auth_headers):
     )
     assert "Girasol" in catalogos["materiales"]  # materiales como nombres
     assert "transportistas" in catalogos
-    assert any(c["modelo"] == "Scania R450" for c in catalogos["choferes"])
+    assert any(
+        c.get("modelo") == "Scania R450"
+        or any(cm.get("modelo") == "Scania R450" for cm in c.get("camiones", []))
+        for c in catalogos["choferes"]
+    )
     assert any(u["nombre"] == "Admin Test" for u in catalogos["administradores"])
 
     # 2. Crear campaña con estado (contrato del front) y viajes borrador.

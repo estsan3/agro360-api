@@ -53,18 +53,24 @@ class Material(Base):
 
 
 class Chofer(Base):
-    """Conductor del camión. En este backoffice solo es dato de catálogo."""
+    """Conductor vinculado a una empresa de transporte."""
 
     __tablename__ = "catalogos_chofer"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_nuevo_id)
     nombre: Mapped[str] = mapped_column(String(120))
-    # Dominio (patente) del camión habitual del chofer.
-    dominio: Mapped[str] = mapped_column(String(10))
-    # Modelo del camión (ej: "Scania R450"); dato informativo para el front.
-    modelo: Mapped[str] = mapped_column(String(80), default="")
+    transportista_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("catalogos_transportista.id"), nullable=True
+    )
+    # Legacy: se mantiene nullable para datos viejos; la patente vive en Camion.
+    dominio: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    modelo: Mapped[str | None] = mapped_column(String(80), nullable=True)
     cuit: Mapped[str | None] = mapped_column(String(13), nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    transportista: Mapped["Transportista | None"] = relationship(
+        back_populates="choferes", lazy="selectin"
+    )
 
 
 class Transportista(Base):
@@ -80,6 +86,10 @@ class Transportista(Base):
     camiones: Mapped[list["Camion"]] = relationship(
         back_populates="transportista",
         cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    choferes: Mapped[list[Chofer]] = relationship(
+        back_populates="transportista",
         lazy="selectin",
     )
 
