@@ -10,7 +10,7 @@ Estado al **14/07/2026**. Documento vivo: se actualiza al cerrar cada fase.
 |------|---------|--------|
 | **1** | Backend: contrato compatible con el front | ✅ Completada |
 | **2** | Frontend: auth Bearer, proxy, `chofer_id` | ✅ Completada |
-| **3** | Verificación E2E + ABMs completos + transportistas | 🔄 3.1 ✅ — pendiente 3.2 y 3.3 |
+| **3** | Verificación E2E + ABMs completos + transportistas | 🔄 3.1 ✅ · 3.3 en progreso |
 | **4** | Cartas de porte (UI + CPE real) | ⏸ Fuera de alcance actual |
 
 ---
@@ -151,7 +151,18 @@ Transportista (empresa)
 3. Dentro de cada transportista: tablas de **camiones** y **choferes** con alta/edición/baja.
 4. En crear-despacho: selector de chofer agrupado por transportista; al elegir chofer, combo de patentes de su empresa (editable manualmente).
 
-**Orden de implementación sugerido**
+**Orden de implementación (branches por entrega)**
+
+| Branch API | Branch Web | Contenido | Estado |
+|------------|------------|-----------|--------|
+| `feat/3.3-1-transportistas-y-camiones` | — | Modelos + CRUD transportista/camión | ✅ merge main |
+| `feat/3.3-2-chofer-transportista` | — | Chofer → transportista + `/catalogos` | ✅ merge main |
+| — | `feat/3.3-3-transportistas-config` | Pestaña Transportistas en Config | ✅ merge main |
+| — | `feat/3.3-4-viajes-chofer-patente` | Crear despacho: chofer + patente de flota | 🔄 |
+
+**Workflow git:** cada fila = branch → test → merge a `main` en el repo correspondiente.
+
+**Orden de implementación sugerido (detalle técnico)**
 
 1. Backend: modelos + migración/seed + CRUD transportista/camión.
 2. Backend: migrar `Chofer` (quitar `dominio` del catálogo, agregar `transportista_id`).
