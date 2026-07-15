@@ -68,7 +68,7 @@ class CrearDespachoRequest(BaseModel):
     administrador_id: str
     vendedor_id: str
     fecha_inicio: date
-    fecha_llegada_estimada: date
+    fecha_llegada_estimada: date | None = None
     viajes: list[CrearViajeRequest] = []
     estado: EstadoDespacho = "borrador"
 

@@ -52,6 +52,9 @@ class DespachosService:
         """Crea una campaña (borrador o directamente activa)."""
         await self._validar_referencias(datos)
 
+        fecha_llegada = self._resolver_fecha_llegada(
+            datos.fecha_inicio, datos.fecha_llegada_estimada
+        )
         despacho = Despacho(
             nombre=datos.nombre,
             productor_id=datos.productor_id,
@@ -62,7 +65,7 @@ class DespachosService:
             administrador_id=datos.administrador_id,
             vendedor_id=datos.vendedor_id,
             fecha_inicio=datos.fecha_inicio,
-            fecha_llegada_estimada=datos.fecha_llegada_estimada,
+            fecha_llegada_estimada=fecha_llegada,
         )
         self._bo.validar_fechas(despacho)
 
@@ -106,7 +109,9 @@ class DespachosService:
         despacho.administrador_id = datos.administrador_id
         despacho.vendedor_id = datos.vendedor_id
         despacho.fecha_inicio = datos.fecha_inicio
-        despacho.fecha_llegada_estimada = datos.fecha_llegada_estimada
+        despacho.fecha_llegada_estimada = self._resolver_fecha_llegada(
+            datos.fecha_inicio, datos.fecha_llegada_estimada
+        )
         self._bo.validar_fechas(despacho)
 
         despacho.viajes.clear()
@@ -266,6 +271,11 @@ class DespachosService:
             )
         if not await self._catalogos.existe_material(datos.material):
             raise ReglaDeNegocioViolada(f"Material desconocido: {datos.material}")
+
+    @staticmethod
+    def _resolver_fecha_llegada(fecha_inicio, fecha_llegada):
+        """Si el front no informa llegada estimada, usa la fecha de inicio."""
+        return fecha_llegada if fecha_llegada is not None else fecha_inicio
 
     async def _construir_viaje(
         self, datos: CrearViajeRequest, estado: str = "pendiente"
