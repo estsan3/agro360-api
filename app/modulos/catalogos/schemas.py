@@ -3,9 +3,21 @@
 from pydantic import BaseModel, Field
 
 
+class PuntoEntradaResponse(BaseModel):
+    id: str
+    nombre: str
+    orden: int = 1
+    latitud: float = 0
+    longitud: float = 0
+    observacion: str = ""
+
+    model_config = {"from_attributes": True}
+
+
 class CampoResponse(BaseModel):
     id: str
     nombre: str
+    puntos_entrada: list[PuntoEntradaResponse] = []
 
     model_config = {"from_attributes": True}
 

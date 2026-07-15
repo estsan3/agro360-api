@@ -57,3 +57,23 @@ async def guardar_preferencias(
 ) -> PreferenciasNotificacion:
     """Actualiza las preferencias de notificación."""
     return await ParametrosService(sesion).guardar_preferencias(datos)
+
+
+@router.get(
+    "/parametria/tipos-vehiculo",
+    response_model=list[str],
+    operation_id="listar_tipos_vehiculo",
+)
+async def listar_tipos_vehiculo() -> list[str]:
+    """Tipos de vehículo para la UI de transportistas."""
+    return ["Tractor", "Camión", "Semi-remolque", "Bitren", "Acoplado"]
+
+
+@router.get(
+    "/parametria/tipos-licencia",
+    response_model=list[str],
+    operation_id="listar_tipos_licencia",
+)
+async def listar_tipos_licencia() -> list[str]:
+    """Tipos de licencia de conducir."""
+    return ["B1", "B2", "C", "D1", "D2", "E1", "E2"]

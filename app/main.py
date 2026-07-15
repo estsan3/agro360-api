@@ -21,6 +21,8 @@ from app.modulos.auth.router import router as auth_router
 from app.modulos.auth.router import router_usuarios, router_vendedores
 from app.modulos.cartas_porte.router import router as cartas_porte_router
 from app.modulos.catalogos.router import router as catalogos_router
+from app.modulos.catalogos.router_productores_abm import router as productores_abm_router
+from app.modulos.catalogos.router_transportistas_abm import router as transportistas_abm_router
 from app.modulos.despachos.router import router as despachos_router
 from app.modulos.mensajeria.eventos import registrar_suscripciones
 from app.modulos.mensajeria.router import router as mensajeria_router
@@ -86,6 +88,8 @@ def crear_aplicacion() -> FastAPI:
     # Antes que catálogos: /catalogos/vendedores debe matchear primero.
     app.include_router(router_vendedores, prefix=prefijo)
     app.include_router(catalogos_router, prefix=prefijo)
+    app.include_router(transportistas_abm_router, prefix=prefijo)
+    app.include_router(productores_abm_router, prefix=prefijo)
     app.include_router(despachos_router, prefix=prefijo)
     app.include_router(mensajeria_router, prefix=prefijo)
     app.include_router(cartas_porte_router, prefix=prefijo)

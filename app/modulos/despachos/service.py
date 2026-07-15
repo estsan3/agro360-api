@@ -16,10 +16,12 @@ from app.modulos.despachos.bo import DespachoBO
 from app.modulos.despachos.dao import DespachoDAO
 from app.modulos.despachos.models import Despacho, Viaje
 from app.modulos.despachos.schemas import (
+    ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
     CrearDespachoRequest,
     CrearViajeRequest,
     DespachoResponse,
+    DuplicarDespachoRequest,
 )
 
 
@@ -145,21 +147,90 @@ class DespachosService:
         await self._dao.eliminar(despacho)
         await self._sesion.commit()
 
+    async def cerrar(self, despacho_id: str) -> DespachoResponse:
+        """Cierra una campaña activa cuando todos sus viajes están completados."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.cerrar(despacho)
+        await self._sesion.commit()
+        await bus_eventos.publicar(
+            EventoDominio(
+                nombre="despachos.despacho.cerrado",
+                datos={"despacho_id": despacho.id, "nombre": despacho.nombre},
+            )
+        )
+        return DespachoResponse.model_validate(despacho)
+
+    async def actualizar_metadatos(
+        self, despacho_id: str, datos: ActualizarMetadatosDespachoRequest
+    ) -> DespachoResponse:
+        """Ajusta fechas y observaciones de una campaña activa."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_edicion_metadatos(despacho)
+        despacho.fecha_llegada_estimada = datos.fecha_llegada_estimada
+        despacho.observaciones = datos.observaciones
+        self._bo.validar_fechas(despacho)
+        await self._sesion.commit()
+        return DespachoResponse.model_validate(despacho)
+
+    async def duplicar(
+        self, despacho_id: str, datos: DuplicarDespachoRequest | None = None
+    ) -> DespachoResponse:
+        """Crea un borrador copia de la campaña (mismos datos y viajes en borrador)."""
+        original = await self._buscar_o_fallar(despacho_id)
+        nombre = (
+            datos.nombre.strip()
+            if datos and datos.nombre
+            else f"{original.nombre} (copia)"
+        )
+        copia = Despacho(
+            nombre=nombre,
+            productor_id=original.productor_id,
+            campo_id=original.campo_id,
+            origen=original.origen,
+            entrada_campo=original.entrada_campo,
+            material=original.material,
+            administrador_id=original.administrador_id,
+            vendedor_id=original.vendedor_id,
+            fecha_inicio=original.fecha_inicio,
+            fecha_llegada_estimada=original.fecha_llegada_estimada,
+            observaciones=original.observaciones,
+            estado="borrador",
+        )
+        for viaje in original.viajes:
+            copia.viajes.append(
+                Viaje(
+                    chofer_id=viaje.chofer_id,
+                    chofer_nombre=viaje.chofer_nombre,
+                    dominio=viaje.dominio,
+                    destino=viaje.destino,
+                    toneladas=viaje.toneladas,
+                    observaciones=viaje.observaciones,
+                    estado="borrador",
+                    progreso=0,
+                )
+            )
+        await self._dao.guardar(copia)
+        await self._sesion.commit()
+        await self._sesion.refresh(copia, attribute_names=["viajes"])
+        return DespachoResponse.model_validate(copia)
+
     # -------------------------------- Viajes --------------------------------
 
     async def agregar_viaje(
         self, despacho_id: str, datos: CrearViajeRequest
     ) -> DespachoResponse:
         despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
         # En campaña borrador el viaje nace borrador; en activa, pendiente.
         estado = "borrador" if despacho.estado == "borrador" else "pendiente"
-        despacho.viajes.append(await self._construir_viaje(datos, estado=estado))
+        despacho.viajes.append(await self._construir_viaje_agregar(datos, estado=estado))
         await self._sesion.commit()
         return DespachoResponse.model_validate(despacho)
 
     async def iniciar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
         """El viaje sale a la ruta: pasa a en_viaje."""
         despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
         viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
         self._bo.validar_inicio_viaje(viaje)
         self._bo.aplicar_estado_viaje(viaje, "en_viaje")
@@ -183,6 +254,7 @@ class DespachosService:
     async def duplicar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
         """Copia un viaje (mismo chofer/destino/toneladas) listo para salir."""
         despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
         original = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
 
         copia = Viaje(
@@ -201,6 +273,7 @@ class DespachosService:
     async def eliminar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
         """Elimina un viaje que todavía no salió a la ruta."""
         despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
         viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
         self._bo.validar_eliminacion_viaje(viaje)
         despacho.viajes.remove(viaje)
@@ -212,6 +285,7 @@ class DespachosService:
     ) -> DespachoResponse:
         """Actualización parcial: asignar chofer, cambiar estado o progreso."""
         despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
         viaje = await self._dao.buscar_viaje(despacho_id, viaje_id)
         if viaje is None:
             raise RecursoNoEncontrado("Viaje no encontrado en esa campaña")
@@ -292,6 +366,22 @@ class DespachosService:
         )
         await self._asignar_chofer(viaje, datos.chofer_id)
         # La patente del viaje puede ser distinta al dominio del catálogo del chofer.
+        if datos.dominio:
+            viaje.dominio = datos.dominio.strip().upper()
+        return viaje
+
+    async def _construir_viaje_agregar(
+        self, datos: CrearViajeRequest, estado: str = "pendiente"
+    ) -> Viaje:
+        """Alta de viaje en campaña existente (chofer opcional)."""
+        viaje = Viaje(
+            destino=datos.destino,
+            toneladas=datos.toneladas,
+            observaciones=datos.observaciones,
+            estado=estado,
+        )
+        if datos.chofer_id:
+            await self._asignar_chofer(viaje, datos.chofer_id)
         if datos.dominio:
             viaje.dominio = datos.dominio.strip().upper()
         return viaje

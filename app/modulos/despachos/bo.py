@@ -4,6 +4,8 @@ Reglas principales del dominio:
 - Una campaña nace en `borrador` y pasa a `activo` al "enviarse".
 - Solo se puede activar una campaña que tenga al menos un viaje.
 - Una campaña activa no puede eliminarse.
+- Una campaña activa se `cierra` cuando todos sus viajes están `completado`.
+- Las campañas cerradas no admiten nuevas operaciones sobre viajes.
 - Transiciones de viaje válidas:
     borrador   → pendiente | en_viaje   (al activar la campaña / iniciar)
     pendiente  → en_viaje
@@ -48,9 +50,38 @@ class DespachoBO:
             )
 
     def validar_eliminacion(self, despacho: Despacho) -> None:
-        """Las campañas activas no se eliminan (tienen operación en curso)."""
-        if despacho.estado == "activo":
-            raise ReglaDeNegocioViolada("No se puede eliminar una campaña activa")
+        """Las campañas activas o cerradas no se eliminan."""
+        if despacho.estado in {"activo", "cerrado"}:
+            raise ReglaDeNegocioViolada("No se puede eliminar una campaña activa o cerrada")
+
+    def validar_campaña_operable(self, despacho: Despacho) -> None:
+        """Bloquea mutaciones sobre campañas ya cerradas."""
+        if despacho.estado == "cerrado":
+            raise ReglaDeNegocioViolada("La campaña está cerrada")
+
+    def validar_cierre(self, despacho: Despacho) -> None:
+        """Solo se cierra una campaña activa con todos los viajes completados."""
+        if despacho.estado != "activo":
+            raise ReglaDeNegocioViolada("Solo se pueden cerrar campañas activas")
+        if not despacho.viajes:
+            raise ReglaDeNegocioViolada("No se puede cerrar una campaña sin viajes")
+        incompletos = [viaje for viaje in despacho.viajes if viaje.estado != "completado"]
+        if incompletos:
+            raise ReglaDeNegocioViolada(
+                f"Quedan {len(incompletos)} viaje(s) sin completar"
+            )
+
+    def cerrar(self, despacho: Despacho) -> None:
+        """Marca la campaña como cerrada (archivada operativamente)."""
+        self.validar_cierre(despacho)
+        despacho.estado = "cerrado"
+
+    def validar_edicion_metadatos(self, despacho: Despacho) -> None:
+        """Metadatos editables solo en campañas activas."""
+        if despacho.estado != "activo":
+            raise ReglaDeNegocioViolada(
+                "Solo se pueden ajustar metadatos de campañas activas"
+            )
 
     def validar_transicion_viaje(self, viaje: Viaje, nuevo_estado: str) -> None:
         """Verifica que el cambio de estado del viaje sea una transición válida."""

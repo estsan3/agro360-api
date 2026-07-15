@@ -41,8 +41,9 @@ class Despacho(Base):
 
     fecha_inicio: Mapped[date] = mapped_column(Date)
     fecha_llegada_estimada: Mapped[date] = mapped_column(Date)
+    observaciones: Mapped[str] = mapped_column(Text, default="")
 
-    # Estados: "borrador" (editable) | "activo" (operativo).
+    # Estados: "borrador" | "activo" | "cerrado".
     estado: Mapped[str] = mapped_column(String(20), default="borrador")
 
     viajes: Mapped[list["Viaje"]] = relationship(

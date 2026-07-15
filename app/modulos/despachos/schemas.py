@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-EstadoDespacho = Literal["borrador", "activo"]
+EstadoDespacho = Literal["borrador", "activo", "cerrado"]
 # "borrador": viaje de una campaña aún no enviada (editable/eliminable).
 EstadoViaje = Literal["borrador", "pendiente", "en_viaje", "retrasado", "completado"]
 
@@ -36,6 +36,7 @@ class DespachoResponse(BaseModel):
     vendedor_id: str
     fecha_inicio: date
     fecha_llegada_estimada: date
+    observaciones: str = ""
     estado: EstadoDespacho
     viajes: list[ViajeResponse] = []
 
@@ -80,3 +81,16 @@ class ActualizarViajeRequest(BaseModel):
     estado: EstadoViaje | None = None
     progreso: int | None = Field(default=None, ge=0, le=100)
     observaciones: str | None = None
+
+
+class ActualizarMetadatosDespachoRequest(BaseModel):
+    """Ajuste acotado de una campaña activa (fechas y notas operativas)."""
+
+    fecha_llegada_estimada: date
+    observaciones: str = Field(default="", max_length=2000)
+
+
+class DuplicarDespachoRequest(BaseModel):
+    """Opcional: nombre de la copia; si no se envía se deriva del original."""
+
+    nombre: str | None = Field(default=None, min_length=2, max_length=120)

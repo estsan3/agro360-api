@@ -12,6 +12,7 @@ from app.modulos.catalogos.schemas import (
     ActualizarTransportistaRequest,
     CamionAgregadoResponse,
     CamionResponse,
+    CampoResponse,
     CatalogosAgregadosResponse,
     ChoferAgregadoResponse,
     ChoferResponse,
@@ -24,6 +25,7 @@ from app.modulos.catalogos.schemas import (
     MaterialResponse,
     PersonaResumenResponse,
     ProductorResponse,
+    PuntoEntradaResponse,
     TransportistaAgregadoResponse,
     TransportistaResponse,
 )
@@ -56,7 +58,9 @@ class CatalogosService:
         transportistas_por_id = {t.id: t for t in transportistas}
 
         return CatalogosAgregadosResponse(
-            productores=[ProductorResponse.model_validate(p) for p in productores],
+            productores=[
+                self._productor_response(p) for p in productores if p.activo
+            ],
             administradores=[
                 PersonaResumenResponse(id=u.id, nombre=u.nombre) for u in administradores
             ],
@@ -86,7 +90,7 @@ class CatalogosService:
 
     async def listar_productores(self) -> list[ProductorResponse]:
         productores = await self._dao.listar_productores()
-        return [ProductorResponse.model_validate(p) for p in productores]
+        return [self._productor_response(p) for p in productores if p.activo]
 
     async def crear_productor(self, datos: CrearProductorRequest) -> ProductorResponse:
         existente = await self._dao.buscar_productor_por_nombre(datos.nombre)
@@ -99,7 +103,7 @@ class CatalogosService:
         )
         await self._dao.guardar(productor)
         await self._sesion.commit()
-        return ProductorResponse.model_validate(productor)
+        return self._productor_response(productor)
 
     async def agregar_campo(
         self, productor_id: str, datos: CrearCampoRequest
@@ -110,7 +114,7 @@ class CatalogosService:
 
         productor.campos.append(Campo(nombre=datos.nombre))
         await self._sesion.commit()
-        return ProductorResponse.model_validate(productor)
+        return self._productor_response(productor)
 
     # ------------------------------ Materiales ------------------------------
 
@@ -289,6 +293,27 @@ class CatalogosService:
             raise RecursoNoEncontrado("Chofer no encontrado")
         chofer.activo = False
         await self._sesion.commit()
+
+    @staticmethod
+    def _campo_response(campo: Campo) -> CampoResponse:
+        return CampoResponse(
+            id=campo.id,
+            nombre=campo.nombre,
+            puntos_entrada=[
+                PuntoEntradaResponse.model_validate(p)
+                for p in sorted(campo.puntos_entrada, key=lambda item: item.orden)
+                if p.activo
+            ],
+        )
+
+    @classmethod
+    def _productor_response(cls, productor: Productor) -> ProductorResponse:
+        return ProductorResponse(
+            id=productor.id,
+            nombre=productor.nombre,
+            cuit=productor.cuit,
+            campos=[cls._campo_response(c) for c in productor.campos if c.activo],
+        )
 
     @staticmethod
     def _camiones_agregados(transportista: Transportista) -> list[CamionAgregadoResponse]:

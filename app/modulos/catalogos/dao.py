@@ -2,6 +2,7 @@
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.modulos.catalogos.models import Camion, Campo, Chofer, Material, Productor, Transportista
 
@@ -25,7 +26,15 @@ class CatalogosDAO:
         return list(resultado.scalars())
 
     async def buscar_productor(self, productor_id: str) -> Productor | None:
-        return await self._sesion.get(Productor, productor_id)
+        resultado = await self._sesion.execute(
+            select(Productor)
+            .where(Productor.id == productor_id)
+            .options(
+                selectinload(Productor.campos).selectinload(Campo.puntos_entrada),
+                selectinload(Productor.responsables),
+            )
+        )
+        return resultado.scalar_one_or_none()
 
     async def buscar_productor_por_nombre(self, nombre: str) -> Productor | None:
         resultado = await self._sesion.execute(
@@ -34,7 +43,12 @@ class CatalogosDAO:
         return resultado.scalar_one_or_none()
 
     async def buscar_campo(self, campo_id: str) -> Campo | None:
-        return await self._sesion.get(Campo, campo_id)
+        resultado = await self._sesion.execute(
+            select(Campo)
+            .where(Campo.id == campo_id)
+            .options(selectinload(Campo.puntos_entrada))
+        )
+        return resultado.scalar_one_or_none()
 
     # ------------------------------ Materiales ------------------------------
 
@@ -73,7 +87,15 @@ class CatalogosDAO:
         return list(resultado.scalars())
 
     async def buscar_transportista(self, transportista_id: str) -> Transportista | None:
-        return await self._sesion.get(Transportista, transportista_id)
+        resultado = await self._sesion.execute(
+            select(Transportista)
+            .where(Transportista.id == transportista_id)
+            .options(
+                selectinload(Transportista.choferes),
+                selectinload(Transportista.camiones),
+            )
+        )
+        return resultado.scalar_one_or_none()
 
     async def buscar_transportista_por_nombre(self, nombre: str) -> Transportista | None:
         resultado = await self._sesion.execute(

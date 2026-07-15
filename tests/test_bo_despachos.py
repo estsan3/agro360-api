@@ -81,3 +81,46 @@ def test_activar_promueve_viajes_borrador(bo):
     bo.activar(despacho)
     assert despacho.estado == "activo"
     assert despacho.viajes[0].estado == "pendiente"
+
+
+def test_cerrar_campaña_con_todos_completados(bo):
+    from app.modulos.despachos.models import Despacho
+
+    despacho = Despacho(estado="activo")
+    despacho.viajes = [
+        Viaje(estado="completado", destino="x", toneladas=1, progreso=100),
+        Viaje(estado="completado", destino="y", toneladas=2, progreso=100),
+    ]
+    bo.cerrar(despacho)
+    assert despacho.estado == "cerrado"
+
+
+def test_cerrar_con_viajes_incompletos_falla(bo):
+    from app.modulos.despachos.models import Despacho
+
+    despacho = Despacho(estado="activo")
+    despacho.viajes = [
+        Viaje(estado="completado", destino="x", toneladas=1, progreso=100),
+        Viaje(estado="en_viaje", destino="y", toneladas=2, progreso=50),
+    ]
+    with pytest.raises(ReglaDeNegocioViolada):
+        bo.cerrar(despacho)
+
+
+def test_campaña_cerrada_no_es_operable(bo):
+    from app.modulos.despachos.models import Despacho
+
+    despacho = Despacho(estado="cerrado")
+    with pytest.raises(ReglaDeNegocioViolada):
+        bo.validar_campaña_operable(despacho)
+
+
+def test_edicion_metadatos_solo_activa(bo):
+    from app.modulos.despachos.models import Despacho
+
+    borrador = Despacho(estado="borrador")
+    with pytest.raises(ReglaDeNegocioViolada):
+        bo.validar_edicion_metadatos(borrador)
+
+    activo = Despacho(estado="activo")
+    bo.validar_edicion_metadatos(activo)

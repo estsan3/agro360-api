@@ -8,10 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import obtener_sesion
 from app.core.dependencias import obtener_usuario_actual
 from app.modulos.despachos.schemas import (
+    ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
     CrearDespachoRequest,
     CrearViajeRequest,
     DespachoResponse,
+    DuplicarDespachoRequest,
 )
 from app.modulos.despachos.service import DespachosService
 
@@ -27,7 +29,7 @@ Sesion = Annotated[AsyncSession, Depends(obtener_sesion)]
 @router.get("", response_model=list[DespachoResponse], operation_id="listar_despachos")
 async def listar(
     sesion: Sesion,
-    estado: Annotated[str | None, Query(pattern="^(borrador|activo)$")] = None,
+    estado: Annotated[str | None, Query(pattern="^(borrador|activo|cerrado)$")] = None,
 ) -> list[DespachoResponse]:
     """Lista las campañas de despacho, opcionalmente filtradas por estado."""
     return await DespachosService(sesion).listar(estado)
@@ -67,6 +69,41 @@ async def activar(despacho_id: str, sesion: Sesion) -> DespachoResponse:
 async def eliminar(despacho_id: str, sesion: Sesion) -> None:
     """Elimina una campaña en borrador. Las activas no se pueden eliminar."""
     await DespachosService(sesion).eliminar(despacho_id)
+
+
+@router.post(
+    "/{despacho_id}/cerrar", response_model=DespachoResponse, operation_id="cerrar_despacho"
+)
+async def cerrar(despacho_id: str, sesion: Sesion) -> DespachoResponse:
+    """Cierra una campaña activa cuando todos sus viajes están completados."""
+    return await DespachosService(sesion).cerrar(despacho_id)
+
+
+@router.patch(
+    "/{despacho_id}/metadatos",
+    response_model=DespachoResponse,
+    operation_id="actualizar_metadatos_despacho",
+)
+async def actualizar_metadatos(
+    despacho_id: str, datos: ActualizarMetadatosDespachoRequest, sesion: Sesion
+) -> DespachoResponse:
+    """Ajusta fecha de llegada estimada y observaciones de una campaña activa."""
+    return await DespachosService(sesion).actualizar_metadatos(despacho_id, datos)
+
+
+@router.post(
+    "/{despacho_id}/duplicar",
+    response_model=DespachoResponse,
+    status_code=201,
+    operation_id="duplicar_despacho",
+)
+async def duplicar(
+    despacho_id: str,
+    sesion: Sesion,
+    datos: DuplicarDespachoRequest | None = None,
+) -> DespachoResponse:
+    """Crea un borrador copia de la campaña indicada."""
+    return await DespachosService(sesion).duplicar(despacho_id, datos)
 
 
 @router.post(
