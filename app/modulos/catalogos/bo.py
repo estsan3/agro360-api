@@ -19,6 +19,14 @@ class CatalogosBO:
         if nombre_ya_existe:
             raise ReglaDeNegocioViolada("Ya existe un material con ese nombre")
 
+    def validar_transportista_nuevo(self, nombre_ya_existe: bool) -> None:
+        if nombre_ya_existe:
+            raise ReglaDeNegocioViolada("Ya existe un transportista con ese nombre")
+
+    def validar_camion_nuevo(self, dominio_ya_existe: bool) -> None:
+        if dominio_ya_existe:
+            raise ReglaDeNegocioViolada("Ya existe un camión con esa patente")
+
     def validar_dominio(self, dominio: str) -> str:
         """Normaliza y valida la patente del camión."""
         normalizado = dominio.strip().upper().replace(" ", "")

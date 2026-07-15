@@ -61,6 +61,62 @@ class CrearChoferRequest(BaseModel):
     cuit: str | None = Field(default=None, max_length=13)
 
 
+# --------------------------- Transportistas / Camiones ---------------------------
+
+
+class CamionResponse(BaseModel):
+    id: str
+    dominio: str
+    modelo: str = ""
+    activo: bool
+
+    model_config = {"from_attributes": True}
+
+
+class CrearCamionRequest(BaseModel):
+    dominio: str = Field(min_length=6, max_length=10, description="Patente, ej: AA123BB")
+    modelo: str = Field(default="", max_length=80)
+
+
+class ActualizarCamionRequest(BaseModel):
+    dominio: str | None = Field(default=None, min_length=6, max_length=10)
+    modelo: str | None = Field(default=None, max_length=80)
+    activo: bool | None = None
+
+
+class TransportistaResponse(BaseModel):
+    id: str
+    nombre: str
+    cuit: str | None = None
+    activo: bool
+    camiones: list[CamionResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+class CrearTransportistaRequest(BaseModel):
+    nombre: str = Field(min_length=2, max_length=120)
+    cuit: str | None = Field(default=None, max_length=13)
+
+
+class ActualizarTransportistaRequest(BaseModel):
+    nombre: str | None = Field(default=None, min_length=2, max_length=120)
+    cuit: str | None = Field(default=None, max_length=13)
+    activo: bool | None = None
+
+
+class CamionAgregadoResponse(BaseModel):
+    id: str
+    dominio: str
+    modelo: str = ""
+
+
+class TransportistaAgregadoResponse(BaseModel):
+    id: str
+    nombre: str
+    camiones: list[CamionAgregadoResponse] = []
+
+
 # ----------------------- Respuesta agregada /catalogos -----------------------
 # Es el contrato que consume el front: todos los maestros en una sola llamada,
 # incluyendo administradores y vendedores (usuarios de auth, vía contrato).
@@ -91,3 +147,4 @@ class CatalogosAgregadosResponse(BaseModel):
     # El front consume los materiales como lista de nombres.
     materiales: list[str]
     choferes: list[ChoferAgregadoResponse]
+    transportistas: list[TransportistaAgregadoResponse] = []

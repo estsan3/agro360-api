@@ -135,6 +135,7 @@ async def test_contrato_front(cliente, auth_headers):
         catalogos
     )
     assert "Girasol" in catalogos["materiales"]  # materiales como nombres
+    assert "transportistas" in catalogos
     assert any(c["modelo"] == "Scania R450" for c in catalogos["choferes"])
     assert any(u["nombre"] == "Admin Test" for u in catalogos["administradores"])
 

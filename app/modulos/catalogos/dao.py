@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modulos.catalogos.models import Campo, Chofer, Material, Productor
+from app.modulos.catalogos.models import Camion, Campo, Chofer, Material, Productor, Transportista
 
 
 class CatalogosDAO:
@@ -62,6 +62,41 @@ class CatalogosDAO:
 
     async def buscar_chofer(self, chofer_id: str) -> Chofer | None:
         return await self._sesion.get(Chofer, chofer_id)
+
+    # --------------------------- Transportistas / Camiones ---------------------------
+
+    async def listar_transportistas(self, solo_activos: bool = True) -> list[Transportista]:
+        consulta = select(Transportista).order_by(Transportista.nombre)
+        if solo_activos:
+            consulta = consulta.where(Transportista.activo.is_(True))
+        resultado = await self._sesion.execute(consulta)
+        return list(resultado.scalars())
+
+    async def buscar_transportista(self, transportista_id: str) -> Transportista | None:
+        return await self._sesion.get(Transportista, transportista_id)
+
+    async def buscar_transportista_por_nombre(self, nombre: str) -> Transportista | None:
+        resultado = await self._sesion.execute(
+            select(Transportista).where(Transportista.nombre == nombre)
+        )
+        return resultado.scalar_one_or_none()
+
+    async def buscar_camion(self, camion_id: str) -> Camion | None:
+        return await self._sesion.get(Camion, camion_id)
+
+    async def buscar_camion_por_dominio(self, dominio: str) -> Camion | None:
+        resultado = await self._sesion.execute(
+            select(Camion).where(Camion.dominio == dominio)
+        )
+        return resultado.scalar_one_or_none()
+
+    async def buscar_camion_de_transportista(
+        self, transportista_id: str, camion_id: str
+    ) -> Camion | None:
+        camion = await self.buscar_camion(camion_id)
+        if camion is None or camion.transportista_id != transportista_id:
+            return None
+        return camion
 
     # -------------------------------- Genérico ------------------------------
 

@@ -65,3 +65,36 @@ class Chofer(Base):
     modelo: Mapped[str] = mapped_column(String(80), default="")
     cuit: Mapped[str | None] = mapped_column(String(13), nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Transportista(Base):
+    """Empresa de transporte (flota + choferes)."""
+
+    __tablename__ = "catalogos_transportista"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_nuevo_id)
+    nombre: Mapped[str] = mapped_column(String(120), unique=True)
+    cuit: Mapped[str | None] = mapped_column(String(13), nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    camiones: Mapped[list["Camion"]] = relationship(
+        back_populates="transportista",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class Camion(Base):
+    """Camión de la flota de un transportista."""
+
+    __tablename__ = "catalogos_camion"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_nuevo_id)
+    dominio: Mapped[str] = mapped_column(String(10), unique=True)
+    modelo: Mapped[str] = mapped_column(String(80), default="")
+    activo: Mapped[bool] = mapped_column(Boolean, default=True)
+    transportista_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("catalogos_transportista.id")
+    )
+
+    transportista: Mapped[Transportista] = relationship(back_populates="camiones")

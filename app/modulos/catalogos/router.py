@@ -8,14 +8,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import obtener_sesion
 from app.core.dependencias import obtener_usuario_actual, requerir_rol
 from app.modulos.catalogos.schemas import (
+    ActualizarCamionRequest,
+    ActualizarTransportistaRequest,
     CatalogosAgregadosResponse,
     ChoferResponse,
+    CrearCamionRequest,
     CrearCampoRequest,
     CrearChoferRequest,
     CrearMaterialRequest,
     CrearProductorRequest,
+    CrearTransportistaRequest,
     MaterialResponse,
     ProductorResponse,
+    TransportistaResponse,
 )
 from app.modulos.catalogos.service import CatalogosService
 
@@ -105,6 +110,101 @@ async def listar_choferes(sesion: Sesion) -> list[ChoferResponse]:
 async def crear_chofer(datos: CrearChoferRequest, sesion: Sesion) -> ChoferResponse:
     """Da de alta un chofer. Solo administradores."""
     return await CatalogosService(sesion).crear_chofer(datos)
+
+
+@router.get(
+    "/transportistas",
+    response_model=list[TransportistaResponse],
+    operation_id="listar_transportistas",
+)
+async def listar_transportistas(sesion: Sesion) -> list[TransportistaResponse]:
+    """Lista empresas de transporte con su flota de camiones."""
+    return await CatalogosService(sesion).listar_transportistas()
+
+
+@router.post(
+    "/transportistas",
+    response_model=TransportistaResponse,
+    status_code=201,
+    dependencies=[Depends(requerir_rol("administrador"))],
+    operation_id="crear_transportista",
+)
+async def crear_transportista(
+    datos: CrearTransportistaRequest, sesion: Sesion
+) -> TransportistaResponse:
+    """Da de alta una empresa de transporte. Solo administradores."""
+    return await CatalogosService(sesion).crear_transportista(datos)
+
+
+@router.put(
+    "/transportistas/{transportista_id}",
+    response_model=TransportistaResponse,
+    dependencies=[Depends(requerir_rol("administrador"))],
+    operation_id="actualizar_transportista",
+)
+async def actualizar_transportista(
+    transportista_id: str,
+    datos: ActualizarTransportistaRequest,
+    sesion: Sesion,
+) -> TransportistaResponse:
+    """Edita una empresa de transporte. Solo administradores."""
+    return await CatalogosService(sesion).actualizar_transportista(transportista_id, datos)
+
+
+@router.delete(
+    "/transportistas/{transportista_id}",
+    status_code=204,
+    dependencies=[Depends(requerir_rol("administrador"))],
+    operation_id="eliminar_transportista",
+)
+async def eliminar_transportista(transportista_id: str, sesion: Sesion) -> None:
+    """Baja lógica de transportista y su flota. Solo administradores."""
+    await CatalogosService(sesion).eliminar_transportista(transportista_id)
+
+
+@router.post(
+    "/transportistas/{transportista_id}/camiones",
+    response_model=TransportistaResponse,
+    status_code=201,
+    dependencies=[Depends(requerir_rol("administrador"))],
+    operation_id="agregar_camion",
+)
+async def agregar_camion(
+    transportista_id: str, datos: CrearCamionRequest, sesion: Sesion
+) -> TransportistaResponse:
+    """Agrega un camión a la flota del transportista. Solo administradores."""
+    return await CatalogosService(sesion).agregar_camion(transportista_id, datos)
+
+
+@router.put(
+    "/transportistas/{transportista_id}/camiones/{camion_id}",
+    response_model=TransportistaResponse,
+    dependencies=[Depends(requerir_rol("administrador"))],
+    operation_id="actualizar_camion",
+)
+async def actualizar_camion(
+    transportista_id: str,
+    camion_id: str,
+    datos: ActualizarCamionRequest,
+    sesion: Sesion,
+) -> TransportistaResponse:
+    """Edita un camión de la flota. Solo administradores."""
+    return await CatalogosService(sesion).actualizar_camion(
+        transportista_id, camion_id, datos
+    )
+
+
+@router.delete(
+    "/transportistas/{transportista_id}/camiones/{camion_id}",
+    status_code=204,
+    dependencies=[Depends(requerir_rol("administrador"))],
+    operation_id="eliminar_camion",
+)
+async def eliminar_camion(
+    transportista_id: str, camion_id: str, sesion: Sesion
+) -> None:
+    """Baja lógica de un camión. Solo administradores."""
+    await CatalogosService(sesion).eliminar_camion(transportista_id, camion_id)
 
 
 # --------------------------------- Bajas ---------------------------------

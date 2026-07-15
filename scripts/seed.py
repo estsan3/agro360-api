@@ -13,7 +13,7 @@ from app.core.database import crear_tablas, fabrica_sesiones
 from app.core.seguridad import hashear_password
 from app.modulos.auth.dao import UsuarioDAO
 from app.modulos.auth.models import Usuario
-from app.modulos.catalogos.models import Campo, Chofer, Material, Productor
+from app.modulos.catalogos.models import Camion, Campo, Chofer, Material, Productor, Transportista
 from app.modulos.despachos.models import Despacho, Viaje
 from app.modulos.mensajeria.models import Conversacion, Mensaje
 
@@ -45,6 +45,28 @@ _CHOFERES = [
     ("ch-2", "Miguel Torres", "EF789GH", "Volvo FH 420"),
     ("ch-3", "Roberto Gómez", "BC456CD", "Scania R450"),
     ("ch-4", "Pedro Ramírez", "XY789ZA", "Iveco Tector 170"),
+]
+
+# Empresas de transporte con flota (patentes alineadas a los choferes seed).
+_TRANSPORTISTAS = [
+    (
+        "t-1",
+        "Transportes del Plata",
+        "30712345671",
+        [
+            ("cm-1", "AA123BB", "Mercedes 1114"),
+            ("cm-2", "EF789GH", "Volvo FH 420"),
+        ],
+    ),
+    (
+        "t-2",
+        "Flota Pampeana",
+        "30709876543",
+        [
+            ("cm-3", "BC456CD", "Scania R450"),
+            ("cm-4", "XY789ZA", "Iveco Tector 170"),
+        ],
+    ),
 ]
 
 # ------------------------------ Despachos -----------------------------
@@ -258,6 +280,20 @@ async def sembrar_datos_demo() -> None:
             for id_, nombre, dominio, modelo in _CHOFERES
         }
         sesion.add_all(choferes.values())
+        sesion.add_all(
+            [
+                Transportista(
+                    id=tid,
+                    nombre=nombre,
+                    cuit=cuit,
+                    camiones=[
+                        Camion(id=cid, dominio=dominio, modelo=modelo)
+                        for cid, dominio, modelo in camiones
+                    ],
+                )
+                for tid, nombre, cuit, camiones in _TRANSPORTISTAS
+            ]
+        )
         await sesion.flush()
 
         # Despachos con sus viajes (los IDs y estados son los del mock).
