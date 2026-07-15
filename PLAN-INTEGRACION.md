@@ -158,7 +158,7 @@ Transportista (empresa)
 | `feat/3.3-1-transportistas-y-camiones` | — | Modelos + CRUD transportista/camión | ✅ merge main |
 | `feat/3.3-2-chofer-transportista` | — | Chofer → transportista + `/catalogos` | ✅ merge main |
 | — | `feat/3.3-3-transportistas-config` | Pestaña Transportistas en Config | ✅ merge main |
-| — | `feat/3.3-4-viajes-chofer-patente` | Crear despacho: chofer + patente de flota | 🔄 |
+| — | `feat/3.3-4-viajes-chofer-patente` | Crear despacho: chofer + patente de flota | ✅ merge main |
 
 **Workflow git:** cada fila = branch → test → merge a `main` en el repo correspondiente.
 
