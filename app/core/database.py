@@ -50,6 +50,7 @@ async def crear_tablas() -> None:
     from app.modulos.cartas_porte import models as _cpe_models  # noqa: F401
     from app.modulos.catalogos import models as _catalogos_models  # noqa: F401
     from app.modulos.despachos import models as _despachos_models  # noqa: F401
+    from app.modulos.liquidaciones import models as _liquidaciones_models  # noqa: F401
     from app.modulos.mensajeria import models as _mensajeria_models  # noqa: F401
     from app.modulos.parametros import models as _parametros_models  # noqa: F401
 
