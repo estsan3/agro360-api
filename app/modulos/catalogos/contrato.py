@@ -21,6 +21,7 @@ class ChoferResumen:
     id: str
     nombre: str
     dominio: str
+    transportista_id: str | None = None
 
 
 class ContratoCatalogos(Protocol):
@@ -33,6 +34,8 @@ class ContratoCatalogos(Protocol):
     async def existe_material(self, nombre: str) -> bool: ...
 
     async def obtener_chofer(self, chofer_id: str) -> ChoferResumen | None: ...
+
+    async def obtener_nombre_transportista(self, transportista_id: str) -> str | None: ...
 
 
 class CatalogosLocal:
@@ -59,4 +62,13 @@ class CatalogosLocal:
                 activos = [c for c in transportista.camiones if c.activo]
                 if activos:
                     dominio = activos[0].dominio
-        return ChoferResumen(id=chofer.id, nombre=chofer.nombre, dominio=dominio)
+        return ChoferResumen(
+            id=chofer.id,
+            nombre=chofer.nombre,
+            dominio=dominio,
+            transportista_id=chofer.transportista_id,
+        )
+
+    async def obtener_nombre_transportista(self, transportista_id: str) -> str | None:
+        transportista = await self._dao.buscar_transportista(transportista_id)
+        return transportista.nombre if transportista else None

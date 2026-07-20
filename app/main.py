@@ -24,6 +24,10 @@ from app.modulos.catalogos.router import router as catalogos_router
 from app.modulos.catalogos.router_productores_abm import router as productores_abm_router
 from app.modulos.catalogos.router_transportistas_abm import router as transportistas_abm_router
 from app.modulos.despachos.router import router as despachos_router
+from app.modulos.liquidaciones.eventos import (
+    registrar_suscripciones as registrar_suscripciones_liquidaciones,
+)
+from app.modulos.liquidaciones.router import router as liquidaciones_router
 from app.modulos.mensajeria.eventos import registrar_suscripciones
 from app.modulos.mensajeria.router import router as mensajeria_router
 from app.modulos.parametros.router import router as parametros_router
@@ -41,8 +45,9 @@ async def ciclo_de_vida(app: FastAPI):
     # En dev/test las tablas se crean directo; en prod, migraciones Alembic.
     await crear_tablas()
 
-    # Suscripciones al bus de eventos (mensajería escucha a despachos).
+    # Suscripciones al bus de eventos (mensajería y liquidaciones escuchan a despachos).
     registrar_suscripciones()
+    registrar_suscripciones_liquidaciones()
 
     # Datos de demo si la base está vacía (equivalente al mock del front).
     if config.seed_al_iniciar and not config.es_produccion:
@@ -94,6 +99,7 @@ def crear_aplicacion() -> FastAPI:
     app.include_router(mensajeria_router, prefix=prefijo)
     app.include_router(cartas_porte_router, prefix=prefijo)
     app.include_router(parametros_router, prefix=prefijo)
+    app.include_router(liquidaciones_router, prefix=prefijo)
     app.include_router(reporteria_router, prefix=prefijo)
 
     @app.get("/health", tags=["Infraestructura"], operation_id="health")
