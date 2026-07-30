@@ -9,7 +9,7 @@ cada módulo a su propia base de datos sin romper claves foráneas.
 import uuid
 from datetime import date
 
-from sqlalchemy import Date, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -46,9 +46,30 @@ class Despacho(Base):
     # Estados: "borrador" | "activo" | "cerrado".
     estado: Mapped[str] = mapped_column(String(20), default="borrador")
 
+    # Oferta comercial de la campaña (editables en borrador / búsqueda).
+    dador_viaje: Mapped[str] = mapped_column(String(80), default="")
+    tarifa_llena: Mapped[bool] = mapped_column(Boolean, default=False)
+    tarifa_por_tn: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distancia_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "ahora" | "manana" | "fecha"
+    cuando: Mapped[str] = mapped_column(String(20), default="ahora")
+    cuando_fecha: Mapped[date | None] = mapped_column(Date, nullable=True)
+
     viajes: Mapped[list["Viaje"]] = relationship(
         back_populates="despacho", cascade="all, delete-orphan", lazy="selectin"
     )
+
+
+class TarifaNacional(Base):
+    """Tramo de tarifa FADEEAC orientativa ($/tn por distancia)."""
+
+    __tablename__ = "despachos_tarifa_nacional"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_nuevo_id)
+    km_desde: Mapped[float] = mapped_column(Float)
+    km_hasta: Mapped[float] = mapped_column(Float)
+    precio_por_tn: Mapped[float] = mapped_column(Float)
+    vigencia: Mapped[str] = mapped_column(String(40), default="2026-03")
 
 
 class Viaje(Base):
@@ -70,8 +91,8 @@ class Viaje(Base):
     destino: Mapped[str] = mapped_column(String(200))
     toneladas: Mapped[float] = mapped_column(Float)
 
-    # Estados: "borrador" | "pendiente" | "en_viaje" | "retrasado" | "completado".
-    estado: Mapped[str] = mapped_column(String(20), default="pendiente")
+    # Estados: borrador | en_busqueda_transportistas | pendiente | en_viaje | ...
+    estado: Mapped[str] = mapped_column(String(40), default="pendiente")
     # Avance del viaje: 0 a 100.
     progreso: Mapped[int] = mapped_column(Integer, default=0)
     observaciones: Mapped[str] = mapped_column(Text, default="")

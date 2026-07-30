@@ -24,6 +24,14 @@ class ChoferResumen:
     transportista_id: str | None = None
 
 
+@dataclass(frozen=True)
+class TransportistaResumen:
+    """Datos mínimos de una empresa transportista."""
+
+    id: str
+    nombre: str
+
+
 class ContratoCatalogos(Protocol):
     """Interfaz que catálogos garantiza al resto del sistema."""
 
@@ -36,6 +44,8 @@ class ContratoCatalogos(Protocol):
     async def obtener_chofer(self, chofer_id: str) -> ChoferResumen | None: ...
 
     async def obtener_nombre_transportista(self, transportista_id: str) -> str | None: ...
+
+    async def listar_transportistas_activos(self) -> list[TransportistaResumen]: ...
 
 
 class CatalogosLocal:
@@ -72,3 +82,7 @@ class CatalogosLocal:
     async def obtener_nombre_transportista(self, transportista_id: str) -> str | None:
         transportista = await self._dao.buscar_transportista(transportista_id)
         return transportista.nombre if transportista else None
+
+    async def listar_transportistas_activos(self) -> list[TransportistaResumen]:
+        filas = await self._dao.listar_transportistas(solo_activos=True)
+        return [TransportistaResumen(id=t.id, nombre=t.nombre) for t in filas]

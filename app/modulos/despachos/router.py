@@ -6,14 +6,19 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import obtener_sesion
-from app.core.dependencias import obtener_usuario_actual
+from app.core.dependencias import obtener_usuario_actual, requerir_rol
 from app.modulos.despachos.schemas import (
     ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
+    BuscarTransportistasRequest,
     CrearDespachoRequest,
     CrearViajeRequest,
     DespachoResponse,
     DuplicarDespachoRequest,
+    ResolverTarifaRequest,
+    ResolverTarifaResponse,
+    TarifaNacionalResponse,
+    TarifasNacionalesRequest,
 )
 from app.modulos.despachos.service import DespachosService
 
@@ -33,6 +38,39 @@ async def listar(
 ) -> list[DespachoResponse]:
     """Lista las campañas de despacho, opcionalmente filtradas por estado."""
     return await DespachosService(sesion).listar(estado)
+
+
+@router.get(
+    "/tarifas-nacionales",
+    response_model=list[TarifaNacionalResponse],
+    operation_id="listar_tarifas_nacionales",
+)
+async def listar_tarifas_nacionales(sesion: Sesion) -> list[TarifaNacionalResponse]:
+    """Tabla FADEEAC orientativa ($/tn por tramo de km)."""
+    return await DespachosService(sesion).listar_tarifas_nacionales()
+
+
+@router.put(
+    "/tarifas-nacionales",
+    response_model=list[TarifaNacionalResponse],
+    dependencies=[Depends(requerir_rol("administrador"))],
+    operation_id="guardar_tarifas_nacionales",
+)
+async def guardar_tarifas_nacionales(
+    datos: TarifasNacionalesRequest, sesion: Sesion
+) -> list[TarifaNacionalResponse]:
+    return await DespachosService(sesion).guardar_tarifas_nacionales(datos.tramos)
+
+
+@router.post(
+    "/tarifas-nacionales/resolver",
+    response_model=ResolverTarifaResponse,
+    operation_id="resolver_tarifa_nacional",
+)
+async def resolver_tarifa(
+    datos: ResolverTarifaRequest, sesion: Sesion
+) -> ResolverTarifaResponse:
+    return await DespachosService(sesion).resolver_tarifa(datos.distancia_km)
 
 
 @router.get("/{despacho_id}", response_model=DespachoResponse, operation_id="obtener_despacho")
@@ -63,6 +101,20 @@ async def actualizar(
 async def activar(despacho_id: str, sesion: Sesion) -> DespachoResponse:
     """Activa una campaña en borrador (requiere al menos un viaje)."""
     return await DespachosService(sesion).activar(despacho_id)
+
+
+@router.post(
+    "/{despacho_id}/buscar-transportistas",
+    response_model=DespachoResponse,
+    operation_id="buscar_transportistas_despacho",
+)
+async def buscar_transportistas(
+    despacho_id: str,
+    sesion: Sesion,
+    datos: BuscarTransportistasRequest = BuscarTransportistasRequest(),
+) -> DespachoResponse:
+    """Crea el viaje en búsqueda (si no hay) y notifica a transportistas."""
+    return await DespachosService(sesion).buscar_transportistas(despacho_id, datos)
 
 
 @router.delete("/{despacho_id}", status_code=204, operation_id="eliminar_despacho")

@@ -18,15 +18,20 @@ def _ahora() -> datetime:
 
 
 class Conversacion(Base):
-    """Hilo de chat entre el equipo admin y un chofer (por chofer/patente)."""
+    """Hilo de chat admin ↔ chofer o admin ↔ empresa transportista."""
 
     __tablename__ = "mensajeria_conversacion"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_nuevo_id)
+    # "chofer" | "transportista"
+    tipo: Mapped[str] = mapped_column(String(20), default="chofer", index=True)
     # Referencia débil al chofer de catálogos + copias para mostrar.
-    chofer_id: Mapped[str] = mapped_column(String(36), index=True)
+    chofer_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    transportista_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
     chofer_nombre: Mapped[str] = mapped_column(String(120))
-    dominio: Mapped[str] = mapped_column(String(10))
+    dominio: Mapped[str] = mapped_column(String(10), default="-")
     # Referencia débil al viaje que originó el chat (para el contexto del front).
     despacho_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     viaje_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

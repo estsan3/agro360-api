@@ -77,10 +77,68 @@ def test_activar_promueve_viajes_borrador(bo):
     from app.modulos.despachos.models import Despacho
 
     despacho = Despacho(estado="borrador")
-    despacho.viajes = [Viaje(estado="borrador", destino="x", toneladas=1)]
+    despacho.viajes = [
+        Viaje(estado="borrador", destino="x", toneladas=1, chofer_id="ch-1")
+    ]
     bo.activar(despacho)
     assert despacho.estado == "activo"
     assert despacho.viajes[0].estado == "pendiente"
+
+
+def test_activar_sin_chofer_falla(bo):
+    from app.modulos.despachos.models import Despacho
+
+    despacho = Despacho(estado="borrador")
+    despacho.viajes = [Viaje(estado="borrador", destino="x", toneladas=1)]
+    with pytest.raises(ReglaDeNegocioViolada):
+        bo.activar(despacho)
+
+
+def test_resolver_tarifa_por_km(bo):
+    tramos = [(0, 100, 25000.0), (101, 200, 40000.0)]
+    assert bo.resolver_tarifa_por_km(80, tramos) == 25000.0
+    assert bo.resolver_tarifa_por_km(150, tramos) == 40000.0
+    with pytest.raises(ReglaDeNegocioViolada):
+        bo.resolver_tarifa_por_km(500, tramos)
+
+
+def test_busqueda_transportistas_valida(bo):
+    from app.modulos.despachos.models import Despacho
+
+    despacho = Despacho(
+        estado="borrador",
+        dador_viaje="COFCO",
+        tarifa_llena=False,
+        tarifa_por_tn=30000,
+        cuando="ahora",
+    )
+    # Ya no exige viajes previos: el service los crea al buscar.
+    despacho.viajes = []
+    bo.validar_busqueda_transportistas(despacho)
+    destino, toneladas = bo.validar_datos_viaje_busqueda("Rosario", 30)
+    assert destino == "Rosario"
+    assert toneladas == 30.0
+    with pytest.raises(ReglaDeNegocioViolada):
+        bo.validar_datos_viaje_busqueda("", 30)
+
+
+def test_mensaje_oferta_plantilla(bo):
+    from datetime import date
+
+    texto = bo.armar_mensaje_oferta(
+        material="Soja",
+        cuando_texto=bo.formatear_cuando("ahora", None, date(2026, 7, 20)),
+        origen="Pergamino",
+        destino="Rosario",
+        tarifa_por_tn=49240.0,
+        tarifa_llena=True,
+        dador_viaje="FEDEA",
+        toneladas=32,
+    )
+    assert "Tipo de carga: Soja" in texto
+    assert "Cuando: Ahora" in texto
+    assert "tarifa llena FADEEAC" in texto
+    assert "Dador: FEDEA" in texto
 
 
 def test_cerrar_campaña_con_todos_completados(bo):
