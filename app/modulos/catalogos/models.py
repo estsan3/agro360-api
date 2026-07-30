@@ -132,6 +132,8 @@ class Transportista(Base):
     nombre: Mapped[str] = mapped_column(String(120), unique=True)
     cuit: Mapped[str | None] = mapped_column(String(13), nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # True = flota del operador logístico (prioridad sobre lista de espera).
+    es_flota_propia: Mapped[bool] = mapped_column(Boolean, default=False)
     datos_ui: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     camiones: Mapped[list["Camion"]] = relationship(
@@ -154,6 +156,9 @@ class Camion(Base):
     dominio: Mapped[str] = mapped_column(String(10), unique=True)
     modelo: Mapped[str] = mapped_column(String(80), default="")
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Capacidad para matching de lista de espera / flota propia.
+    capacidad_tn: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tipo_unidad: Mapped[str] = mapped_column(String(40), default="tolva")
     datos_ui: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     transportista_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("catalogos_transportista.id")

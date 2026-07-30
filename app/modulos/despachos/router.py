@@ -10,6 +10,7 @@ from app.core.dependencias import obtener_usuario_actual, requerir_rol
 from app.modulos.despachos.schemas import (
     ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
+    AsignarPorListaRequest,
     BuscarTransportistasRequest,
     CrearDespachoRequest,
     CrearViajeRequest,
@@ -191,6 +192,57 @@ async def actualizar_viaje(
 async def iniciar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
     """El viaje sale a la ruta (pasa a en_viaje). Requiere chofer asignado."""
     return await DespachosService(sesion).iniciar_viaje(despacho_id, viaje_id)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/asignar-por-lista",
+    response_model=DespachoResponse,
+    operation_id="asignar_viaje_por_lista",
+)
+async def asignar_por_lista(
+    despacho_id: str,
+    viaje_id: str,
+    sesion: Sesion,
+    datos: AsignarPorListaRequest = AsignarPorListaRequest(),
+) -> DespachoResponse:
+    """Asigna flota propia si hay; si no, ofrece al siguiente de la lista FIFO."""
+    return await DespachosService(sesion).asignar_por_lista(despacho_id, viaje_id, datos)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/aceptar-oferta-lista",
+    response_model=DespachoResponse,
+    operation_id="aceptar_oferta_lista_viaje",
+)
+async def aceptar_oferta_lista(
+    despacho_id: str,
+    viaje_id: str,
+    sesion: Sesion,
+    entrada_id: Annotated[str, Query()],
+    empresa_id: Annotated[str, Query()] = "default",
+) -> DespachoResponse:
+    """Acepta la oferta de lista de espera y asigna el chofer al viaje."""
+    return await DespachosService(sesion).aceptar_oferta_lista(
+        despacho_id, viaje_id, entrada_id, empresa_id=empresa_id
+    )
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/rechazar-oferta-lista",
+    response_model=DespachoResponse,
+    operation_id="rechazar_oferta_lista_viaje",
+)
+async def rechazar_oferta_lista(
+    despacho_id: str,
+    viaje_id: str,
+    sesion: Sesion,
+    empresa_id: Annotated[str, Query()] = "default",
+    tipo_unidad: Annotated[str | None, Query()] = None,
+) -> DespachoResponse:
+    """Rechaza la oferta (unidad al fondo) y ofrece al siguiente apto."""
+    return await DespachosService(sesion).rechazar_oferta_lista(
+        despacho_id, viaje_id, empresa_id=empresa_id, tipo_unidad=tipo_unidad
+    )
 
 
 @router.post(

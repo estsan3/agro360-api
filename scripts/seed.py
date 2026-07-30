@@ -26,6 +26,7 @@ from app.modulos.catalogos.models import (
 from app.modulos.despachos.models import Despacho, Viaje
 from app.modulos.liquidaciones.bo import LiquidacionesBO
 from app.modulos.liquidaciones.models import MovimientoCtacte
+from app.modulos.lista_espera.models import EntradaLista
 from app.modulos.mensajeria.models import Conversacion, Mensaje
 
 # Credenciales de demo (las mismas que el mock del front).
@@ -300,6 +301,8 @@ def _construir_camion(
         modelo=modelo,
         transportista_id=transportista_id,
         activo=activo,
+        capacidad_tn=30.0 + (indice_global % 4) * 5.0,
+        tipo_unidad=tipo or "tolva",
         datos_ui=_datos_ui_camion(marca, tipo, indice_global),
     )
 
@@ -386,6 +389,7 @@ def _construir_catalogos_demo() -> tuple[list[Productor], list[Transportista], l
                 nombre=nombre,
                 cuit="30712345671" if tid == "t-1" else "30709876543" if tid == "t-2" else _cuit_demo(100 + i),
                 activo=activo,
+                es_flota_propia=(tid == "t-1"),
                 datos_ui={k: v for k, v in ui.items() if k != "_activo_override"},
                 camiones=camiones,
             )
@@ -765,6 +769,104 @@ def _sembrar_cuenta_corriente_demo() -> list[MovimientoCtacte]:
     return movs
 
 
+def _sembrar_lista_espera_demo(
+    transportistas: list[Transportista], choferes_lista: list[Chofer]
+) -> list[EntradaLista]:
+    """Cola FIFO de demo: 5 fleteros anotados (sin flota propia).
+
+    Orden: el más antiguo primero (listo para ofrecer al asignar por lista).
+    """
+    ahora = datetime.utcnow()
+    por_id = {t.id: t for t in transportistas}
+    por_chofer = {c.id: c for c in choferes_lista}
+    # Unidades de t-2..t-6 (terceros) con chofer vinculado a camión.
+    candidatos: list[tuple[str, str, str]] = []
+    for tid in ("t-2", "t-3", "t-4", "t-5", "t-6"):
+        t = por_id.get(tid)
+        if t is None or t.es_flota_propia:
+            continue
+        camiones = {c.id: c for c in t.camiones if c.activo}
+        for chofer in choferes_lista:
+            if chofer.transportista_id != tid or not chofer.activo or not chofer.camion_id:
+                continue
+            camion = camiones.get(chofer.camion_id)
+            if camion is None:
+                continue
+            candidatos.append((tid, chofer.id, camion.id))
+            break
+
+    entradas: list[EntradaLista] = []
+    for i, (tid, ch_id, cm_id) in enumerate(candidatos[:5]):
+        t = por_id[tid]
+        chofer = por_chofer[ch_id]
+        camion = next(c for c in t.camiones if c.id == cm_id)
+        entradas.append(
+            EntradaLista(
+                id=f"le-{i + 1}",
+                empresa_id="default",
+                transportista_id=tid,
+                camion_id=cm_id,
+                chofer_id=ch_id,
+                transportista_nombre=t.nombre,
+                chofer_nombre=chofer.nombre,
+                dominio=camion.dominio,
+                capacidad_tn=camion.capacidad_tn,
+                tipo_unidad=camion.tipo_unidad or "tolva",
+                estado="en_espera",
+                anotado_en=ahora - timedelta(hours=5 - i, minutes=i * 7),
+            )
+        )
+    return entradas
+
+
+def _despacho_lista_espera_demo() -> Despacho:
+    """Campaña activa con viajes sin chofer, pensada para probar asignar-por-lista."""
+    return Despacho(
+        id="d-lista-1",
+        nombre="Demo Lista de Espera",
+        productor_id="p-1",
+        campo_id="c-1",
+        origen="Pergamino, Buenos Aires",
+        entrada_campo="Entrada Norte",
+        material="Soja",
+        administrador_id="a-1",
+        vendedor_id="v-1",
+        fecha_inicio=date(2026, 7, 28),
+        fecha_llegada_estimada=date(2026, 8, 5),
+        estado="activo",
+        dador_viaje="Agro Demo SA",
+        tarifa_por_tn=45000.0,
+        cuando="ahora",
+        observaciones="Viajes sin asignar para probar flota propia + lista FIFO",
+        viajes=[
+            Viaje(
+                id="viaje-lista-1",
+                destino="Rosario - Terminal",
+                toneladas=28,
+                estado="pendiente",
+                progreso=0,
+                observaciones="Probar: Asignar por lista",
+            ),
+            Viaje(
+                id="viaje-lista-2",
+                destino="Puerto San Martín",
+                toneladas=30,
+                estado="pendiente",
+                progreso=0,
+                observaciones="Segundo viaje sin chofer",
+            ),
+            Viaje(
+                id="viaje-lista-3",
+                destino="San Lorenzo - Puerto",
+                toneladas=25,
+                estado="pendiente",
+                progreso=0,
+                observaciones="Tercer viaje sin chofer",
+            ),
+        ],
+    )
+
+
 async def sembrar_datos_demo() -> None:
     """Inserta usuarios, catálogos, campañas y conversaciones de demo."""
     async with fabrica_sesiones() as sesion:
@@ -826,6 +928,10 @@ async def sembrar_datos_demo() -> None:
                 )
             )
 
+        # Campaña extra + cola FIFO para probar lista de espera.
+        sesion.add(_despacho_lista_espera_demo())
+        sesion.add_all(_sembrar_lista_espera_demo(transportistas, choferes_lista))
+
         # Conversaciones vinculadas a los viajes de arriba.
         for (id_, chofer_id, despacho_id, viaje_id, origen, destino, no_leidos,
              mensajes) in _CONVERSACIONES:
@@ -860,16 +966,40 @@ async def sembrar_datos_demo() -> None:
 
 
 if __name__ == "__main__":
+    import sys
+
     # Ejecución manual: crea las tablas y siembra.
+    # Uso: python -m scripts.seed [--force]
     async def _main() -> None:
+        forzar = "--force" in sys.argv
+        if forzar:
+            from app.core.database import Base, engine
+
+            # Registrar metadata de todos los módulos antes de dropear.
+            await crear_tablas()
+            async with engine.begin() as conexion:
+                await conexion.run_sync(Base.metadata.drop_all)
+            print("Base vaciada (--force).")
+
         await crear_tablas()
+        async with fabrica_sesiones() as sesion:
+            ya_habia = await UsuarioDAO(sesion).contar() > 0
         await sembrar_datos_demo()
+        if ya_habia and not forzar:
+            print(
+                "La base ya tenía datos; no se re-sembró. "
+                "Usá: python -m scripts.seed --force"
+            )
+            return
         print(
             f"Seed listo. Login demo: {EMAIL_DEMO} / {PASSWORD_DEMO}\n"
             f"  · {CANTIDAD_TRANSPORTISTAS} transportistas "
             f"({CAMIONES_POR_TRANSPORTISTA} camiones + {CHOFERES_POR_TRANSPORTISTA} choferes c/u)\n"
             f"  · {CANTIDAD_PRODUCTORES} productores "
-            f"({CAMPOS_POR_PRODUCTOR} campos + {RESPONSABLES_POR_PRODUCTOR} responsables c/u)"
+            f"({CAMPOS_POR_PRODUCTOR} campos + {RESPONSABLES_POR_PRODUCTOR} responsables c/u)\n"
+            f"  · Lista de espera: 5 unidades en cola (t-2…)\n"
+            f"  · Campaña 'Demo Lista de Espera' (d-lista-1) con 3 viajes sin asignar\n"
+            f"  · Flota propia: Transportes del Plata (t-1)"
         )
 
     asyncio.run(_main())

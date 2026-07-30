@@ -28,6 +28,10 @@ from app.modulos.liquidaciones.eventos import (
     registrar_suscripciones as registrar_suscripciones_liquidaciones,
 )
 from app.modulos.liquidaciones.router import router as liquidaciones_router
+from app.modulos.lista_espera.eventos import (
+    registrar_suscripciones as registrar_suscripciones_lista_espera,
+)
+from app.modulos.lista_espera.router import router as lista_espera_router
 from app.modulos.mensajeria.eventos import registrar_suscripciones
 from app.modulos.mensajeria.router import router as mensajeria_router
 from app.modulos.parametros.router import router as parametros_router
@@ -48,6 +52,7 @@ async def ciclo_de_vida(app: FastAPI):
     # Suscripciones al bus de eventos (mensajería y liquidaciones escuchan a despachos).
     registrar_suscripciones()
     registrar_suscripciones_liquidaciones()
+    registrar_suscripciones_lista_espera()
 
     # Datos de demo si la base está vacía (equivalente al mock del front).
     if config.seed_al_iniciar and not config.es_produccion:
@@ -96,6 +101,7 @@ def crear_aplicacion() -> FastAPI:
     app.include_router(transportistas_abm_router, prefix=prefijo)
     app.include_router(productores_abm_router, prefix=prefijo)
     app.include_router(despachos_router, prefix=prefijo)
+    app.include_router(lista_espera_router, prefix=prefijo)
     app.include_router(mensajeria_router, prefix=prefijo)
     app.include_router(cartas_porte_router, prefix=prefijo)
     app.include_router(parametros_router, prefix=prefijo)

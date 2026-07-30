@@ -175,3 +175,10 @@ class BuscarTransportistasRequest(BaseModel):
 
     destino: str | None = Field(default=None, min_length=2, max_length=200)
     toneladas: float | None = Field(default=None, gt=0, le=100)
+
+
+class AsignarPorListaRequest(BaseModel):
+    """Parámetros opcionales para asignación por flota propia / lista FIFO."""
+
+    empresa_id: str = "default"
+    tipo_unidad: str | None = Field(default=None, max_length=40)

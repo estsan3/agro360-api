@@ -20,6 +20,7 @@ from app.modulos.despachos.models import Despacho, TarifaNacional, Viaje
 from app.modulos.despachos.schemas import (
     ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
+    AsignarPorListaRequest,
     BuscarTransportistasRequest,
     CrearDespachoRequest,
     CrearViajeRequest,
@@ -29,6 +30,7 @@ from app.modulos.despachos.schemas import (
     TarifaNacionalItem,
     TarifaNacionalResponse,
 )
+from app.modulos.lista_espera.contrato import ContratoListaEspera, ListaEsperaLocal
 
 
 class DespachosService:
@@ -38,6 +40,7 @@ class DespachosService:
         self,
         sesion: AsyncSession,
         catalogos: ContratoCatalogos | None = None,
+        lista_espera: ContratoListaEspera | None = None,
     ) -> None:
         self._sesion = sesion
         self._dao = DespachoDAO(sesion)
@@ -45,6 +48,7 @@ class DespachosService:
         # El contrato es inyectable: en tests se pasa un fake; cuando
         # catálogos sea microservicio, se pasa el cliente HTTP.
         self._catalogos = catalogos or CatalogosLocal(sesion)
+        self._lista_espera = lista_espera or ListaEsperaLocal(sesion)
 
     # ------------------------------- Campañas -------------------------------
 
@@ -437,6 +441,109 @@ class DespachosService:
                     },
                 )
             )
+        return DespachoResponse.model_validate(despacho)
+
+    async def asignar_por_lista(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        datos: AsignarPorListaRequest | None = None,
+    ) -> DespachoResponse:
+        """Flota propia primero; si no hay, ofrece al siguiente de la lista FIFO."""
+        req = datos or AsignarPorListaRequest()
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        self._bo.validar_asignacion_por_lista(viaje)
+
+        await self._lista_espera.procesar_timeouts(req.empresa_id)
+
+        ocupados = await self._dao.listar_choferes_ocupados()
+        propias = await self._catalogos.listar_unidades_propias()
+        elegida = self._bo.elegir_flota_propia(
+            propias, ocupados, viaje.toneladas, req.tipo_unidad
+        )
+        if elegida is not None:
+            await self._asignar_chofer(viaje, elegida.chofer_id)
+            viaje.dominio = elegida.dominio
+            if viaje.estado in {"borrador", "en_busqueda_transportistas"}:
+                self._bo.aplicar_estado_viaje(viaje, "pendiente")
+            await self._sesion.commit()
+            return DespachoResponse.model_validate(despacho)
+
+        oferta = await self._lista_espera.ofertar_siguiente(
+            viaje.id,
+            viaje.toneladas,
+            tipo_unidad=req.tipo_unidad,
+            empresa_id=req.empresa_id,
+        )
+        if oferta.entrada_id is None:
+            raise ReglaDeNegocioViolada(
+                oferta.mensaje or "No hay flota propia ni unidades en lista de espera"
+            )
+        if viaje.estado == "borrador":
+            self._bo.aplicar_estado_viaje(viaje, "en_busqueda_transportistas")
+        elif viaje.estado == "pendiente" and not viaje.chofer_id:
+            self._bo.aplicar_estado_viaje(viaje, "en_busqueda_transportistas")
+        await self._sesion.commit()
+        return DespachoResponse.model_validate(despacho)
+
+    async def aceptar_oferta_lista(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        entrada_id: str,
+        *,
+        empresa_id: str = "default",
+    ) -> DespachoResponse:
+        """Acepta la oferta de la lista y asigna el chofer al viaje."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+
+        oferta = await self._lista_espera.obtener_oferta_viaje(empresa_id, viaje_id)
+        if oferta is None or oferta.id != entrada_id:
+            raise ReglaDeNegocioViolada(
+                "No hay oferta activa de esa entrada para este viaje"
+            )
+
+        # Mismas mutaciones en la sesión; el commit lo hace aceptar_oferta.
+        await self._asignar_chofer(viaje, oferta.chofer_id)
+        viaje.dominio = oferta.dominio
+        if viaje.estado != "pendiente":
+            self._bo.aplicar_estado_viaje(viaje, "pendiente")
+        await self._lista_espera.aceptar_oferta(entrada_id, viaje_id)
+        await self._sesion.refresh(despacho, attribute_names=["viajes"])
+        return DespachoResponse.model_validate(despacho)
+
+    async def rechazar_oferta_lista(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        *,
+        empresa_id: str = "default",
+        tipo_unidad: str | None = None,
+    ) -> DespachoResponse:
+        """Rechazo: unidad al fondo y se ofrece al siguiente apto."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+
+        oferta = await self._lista_espera.obtener_oferta_viaje(empresa_id, viaje_id)
+        if oferta is None:
+            raise ReglaDeNegocioViolada("No hay oferta activa para este viaje")
+
+        await self._lista_espera.rechazar_oferta(oferta.id)
+        nueva = await self._lista_espera.ofertar_siguiente(
+            viaje.id,
+            viaje.toneladas,
+            tipo_unidad=tipo_unidad,
+            empresa_id=empresa_id,
+        )
+        if nueva.entrada_id is None and viaje.estado == "en_busqueda_transportistas":
+            # Sin más candidatos: vuelve a pendiente sin chofer.
+            viaje.estado = "pendiente"
+        await self._sesion.commit()
         return DespachoResponse.model_validate(despacho)
 
     # ------------------------------- Privados -------------------------------

@@ -24,7 +24,7 @@ from app.modulos.despachos.models import Despacho, Viaje
 _TRANSICIONES_VIAJE: dict[str, set[str]] = {
     "borrador": {"pendiente", "en_viaje", "en_busqueda_transportistas"},
     "en_busqueda_transportistas": {"borrador", "pendiente"},
-    "pendiente": {"en_viaje"},
+    "pendiente": {"en_viaje", "en_busqueda_transportistas"},
     "en_viaje": {"retrasado", "completado"},
     "retrasado": {"en_viaje", "completado"},
     "completado": set(),
@@ -32,6 +32,7 @@ _TRANSICIONES_VIAJE: dict[str, set[str]] = {
 
 # Estados en los que un viaje todavía no salió a la ruta.
 _ESTADOS_SIN_INICIAR = {"borrador", "pendiente", "en_busqueda_transportistas"}
+_ESTADOS_ASIGNABLES_LISTA = {"borrador", "pendiente", "en_busqueda_transportistas"}
 
 
 class DespachoBO:
@@ -43,6 +44,50 @@ class DespachoBO:
             raise ReglaDeNegocioViolada(
                 "La fecha de llegada estimada no puede ser anterior a la de inicio"
             )
+
+    def validar_asignacion_por_lista(self, viaje: Viaje) -> None:
+        """El viaje debe poder recibir asignación automática."""
+        if viaje.estado not in _ESTADOS_ASIGNABLES_LISTA:
+            raise ReglaDeNegocioViolada(
+                f"No se puede asignar por lista un viaje en estado {viaje.estado}"
+            )
+        if viaje.chofer_id and viaje.estado == "pendiente":
+            raise ReglaDeNegocioViolada("El viaje ya tiene chofer asignado")
+
+    @staticmethod
+    def unidad_compatible(
+        *,
+        capacidad_tn: float | None,
+        tipo_unidad: str,
+        toneladas: float,
+        tipo_requerido: str | None = None,
+    ) -> bool:
+        if capacidad_tn is not None and capacidad_tn < toneladas:
+            return False
+        if tipo_requerido and tipo_unidad.lower() != tipo_requerido.lower():
+            return False
+        return True
+
+    def elegir_flota_propia(
+        self,
+        unidades: list,
+        choferes_ocupados: set[str],
+        toneladas: float,
+        tipo_unidad: str | None = None,
+    ):
+        """Primera unidad propia libre y compatible (orden de lista recibida)."""
+        for u in unidades:
+            if u.chofer_id in choferes_ocupados:
+                continue
+            if not self.unidad_compatible(
+                capacidad_tn=u.capacidad_tn,
+                tipo_unidad=u.tipo_unidad,
+                toneladas=toneladas,
+                tipo_requerido=tipo_unidad,
+            ):
+                continue
+            return u
+        return None
 
     def validar_activacion(self, despacho: Despacho) -> None:
         """Solo se activa una campaña en borrador y con viajes cargados."""

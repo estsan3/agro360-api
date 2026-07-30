@@ -30,6 +30,16 @@ class DespachoDAO:
         )
         return resultado.scalar_one_or_none()
 
+    async def listar_choferes_ocupados(self) -> set[str]:
+        """Choferes con viaje activo (no disponible para nueva asignación)."""
+        resultado = await self._sesion.execute(
+            select(Viaje.chofer_id).where(
+                Viaje.chofer_id.is_not(None),
+                Viaje.estado.in_(["pendiente", "en_viaje", "retrasado"]),
+            )
+        )
+        return {cid for cid in resultado.scalars() if cid}
+
     async def guardar(self, despacho: Despacho) -> Despacho:
         self._sesion.add(despacho)
         await self._sesion.flush()
