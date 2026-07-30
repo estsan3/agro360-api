@@ -50,8 +50,21 @@ async def _al_cambiar_estado_viaje(evento: EventoDominio) -> None:
         await MensajeriaService(sesion).notificar_evento_viaje(viaje.chofer_id, texto)
 
 
+async def _al_buscar_transportistas(evento: EventoDominio) -> None:
+    """Publica la oferta de carga a todas las empresas transportistas activas."""
+    async with fabrica_sesiones() as sesion:
+        await MensajeriaService(sesion).publicar_oferta_transportistas(
+            despacho_id=evento.datos["despacho_id"],
+            viaje_id=evento.datos["viaje_id"],
+            origen=evento.datos.get("origen", ""),
+            destino=evento.datos.get("destino", ""),
+            mensaje=evento.datos.get("mensaje", ""),
+        )
+
+
 def registrar_suscripciones() -> None:
     """Registra los manejadores en el bus. Se llama una vez desde main.py."""
     bus_eventos.suscribir("despachos.viaje.iniciado", _al_iniciar_viaje)
     bus_eventos.suscribir("despachos.viaje.completado", _al_cambiar_estado_viaje)
     bus_eventos.suscribir("despachos.viaje.retrasado", _al_cambiar_estado_viaje)
+    bus_eventos.suscribir("despachos.viaje.en_busqueda", _al_buscar_transportistas)

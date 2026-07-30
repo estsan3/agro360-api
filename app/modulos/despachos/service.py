@@ -7,6 +7,8 @@ módulos:
   otros módulos escuchan sin acoplarse.
 """
 
+from datetime import date
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.eventos import EventoDominio, bus_eventos
@@ -14,14 +16,18 @@ from app.core.excepciones import RecursoNoEncontrado, ReglaDeNegocioViolada
 from app.modulos.catalogos.contrato import CatalogosLocal, ContratoCatalogos
 from app.modulos.despachos.bo import DespachoBO
 from app.modulos.despachos.dao import DespachoDAO
-from app.modulos.despachos.models import Despacho, Viaje
+from app.modulos.despachos.models import Despacho, TarifaNacional, Viaje
 from app.modulos.despachos.schemas import (
     ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
+    BuscarTransportistasRequest,
     CrearDespachoRequest,
     CrearViajeRequest,
     DespachoResponse,
     DuplicarDespachoRequest,
+    ResolverTarifaResponse,
+    TarifaNacionalItem,
+    TarifaNacionalResponse,
 )
 
 
@@ -69,12 +75,16 @@ class DespachosService:
             fecha_inicio=datos.fecha_inicio,
             fecha_llegada_estimada=fecha_llegada,
         )
+        await self._aplicar_campos_comerciales(despacho, datos)
         self._bo.validar_fechas(despacho)
 
         # Alta de los viajes iniciales: nacen en borrador junto con la campaña.
+        exigir_chofer = datos.estado == "activo"
         for datos_viaje in datos.viajes:
             despacho.viajes.append(
-                await self._construir_viaje(datos_viaje, estado="borrador")
+                await self._construir_viaje(
+                    datos_viaje, estado="borrador", exigir_chofer=exigir_chofer
+                )
             )
 
         if datos.estado == "activo":
@@ -114,12 +124,16 @@ class DespachosService:
         despacho.fecha_llegada_estimada = self._resolver_fecha_llegada(
             datos.fecha_inicio, datos.fecha_llegada_estimada
         )
+        await self._aplicar_campos_comerciales(despacho, datos)
         self._bo.validar_fechas(despacho)
 
         despacho.viajes.clear()
+        exigir_chofer = datos.estado == "activo"
         for datos_viaje in datos.viajes:
             despacho.viajes.append(
-                await self._construir_viaje(datos_viaje, estado="borrador")
+                await self._construir_viaje(
+                    datos_viaje, estado="borrador", exigir_chofer=exigir_chofer
+                )
             )
 
         if datos.estado == "activo":
@@ -195,6 +209,12 @@ class DespachosService:
             fecha_llegada_estimada=original.fecha_llegada_estimada,
             observaciones=original.observaciones,
             estado="borrador",
+            dador_viaje=original.dador_viaje,
+            tarifa_llena=original.tarifa_llena,
+            tarifa_por_tn=original.tarifa_por_tn,
+            distancia_km=original.distancia_km,
+            cuando=original.cuando,
+            cuando_fecha=original.cuando_fecha,
         )
         for viaje in original.viajes:
             copia.viajes.append(
@@ -321,6 +341,104 @@ class DespachosService:
             )
         return DespachoResponse.model_validate(despacho)
 
+    # ----------------------- Tarifas / búsqueda ---------------------------
+
+    async def listar_tarifas_nacionales(self) -> list[TarifaNacionalResponse]:
+        filas = await self._dao.listar_tarifas_nacionales()
+        if not filas:
+            await self._sembrar_tarifas_default()
+            filas = await self._dao.listar_tarifas_nacionales()
+        return [TarifaNacionalResponse.model_validate(f) for f in filas]
+
+    async def guardar_tarifas_nacionales(
+        self, tramos: list[TarifaNacionalItem]
+    ) -> list[TarifaNacionalResponse]:
+        entidades = [
+            TarifaNacional(
+                km_desde=t.km_desde,
+                km_hasta=t.km_hasta,
+                precio_por_tn=t.precio_por_tn,
+                vigencia=t.vigencia,
+            )
+            for t in tramos
+        ]
+        filas = await self._dao.reemplazar_tarifas_nacionales(entidades)
+        await self._sesion.commit()
+        return [TarifaNacionalResponse.model_validate(f) for f in filas]
+
+    async def resolver_tarifa(self, distancia_km: float) -> ResolverTarifaResponse:
+        precio, vigencia = await self._precio_tarifa_nacional(distancia_km)
+        return ResolverTarifaResponse(
+            distancia_km=distancia_km, precio_por_tn=precio, vigencia=vigencia
+        )
+
+    async def buscar_transportistas(
+        self,
+        despacho_id: str,
+        datos: BuscarTransportistasRequest | None = None,
+    ) -> DespachoResponse:
+        """Crea/marca viajes en búsqueda y publica oferta a transportistas."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        if despacho.tarifa_llena and despacho.distancia_km:
+            precio, _ = await self._precio_tarifa_nacional(despacho.distancia_km)
+            despacho.tarifa_por_tn = precio
+        self._bo.validar_busqueda_transportistas(despacho)
+
+        candidatos = [
+            v
+            for v in despacho.viajes
+            if v.estado in {"borrador", "en_busqueda_transportistas"}
+        ]
+        if not candidatos:
+            # La tabla de viajes no es prerequisito: se genera el viaje de oferta.
+            req = datos or BuscarTransportistasRequest()
+            destino, toneladas = self._bo.validar_datos_viaje_busqueda(
+                req.destino, req.toneladas
+            )
+            nuevo = Viaje(
+                destino=destino,
+                toneladas=toneladas,
+                estado="en_busqueda_transportistas",
+            )
+            despacho.viajes.append(nuevo)
+            candidatos = [nuevo]
+        else:
+            for viaje in candidatos:
+                viaje.estado = "en_busqueda_transportistas"
+
+        await self._sesion.commit()
+        await self._sesion.refresh(despacho, attribute_names=["viajes"])
+
+        cuando_txt = self._bo.formatear_cuando(
+            despacho.cuando, despacho.cuando_fecha, date.today()
+        )
+        for viaje in despacho.viajes:
+            if viaje.estado != "en_busqueda_transportistas":
+                continue
+            texto = self._bo.armar_mensaje_oferta(
+                material=despacho.material,
+                cuando_texto=cuando_txt,
+                origen=despacho.origen,
+                destino=viaje.destino,
+                tarifa_por_tn=float(despacho.tarifa_por_tn or 0),
+                tarifa_llena=despacho.tarifa_llena,
+                dador_viaje=despacho.dador_viaje,
+                toneladas=viaje.toneladas,
+            )
+            await bus_eventos.publicar(
+                EventoDominio(
+                    nombre="despachos.viaje.en_busqueda",
+                    datos={
+                        "despacho_id": despacho.id,
+                        "viaje_id": viaje.id,
+                        "origen": despacho.origen,
+                        "destino": viaje.destino,
+                        "mensaje": texto,
+                    },
+                )
+            )
+        return DespachoResponse.model_validate(despacho)
+
     # ------------------------------- Privados -------------------------------
 
     async def _buscar_o_fallar(self, despacho_id: str) -> Despacho:
@@ -352,28 +470,16 @@ class DespachosService:
         return fecha_llegada if fecha_llegada is not None else fecha_inicio
 
     async def _construir_viaje(
-        self, datos: CrearViajeRequest, estado: str = "pendiente"
+        self,
+        datos: CrearViajeRequest,
+        estado: str = "pendiente",
+        *,
+        exigir_chofer: bool = True,
     ) -> Viaje:
         """Crea la entidad Viaje resolviendo el chofer contra catálogos."""
-        if not datos.chofer_id:
+        if exigir_chofer and not datos.chofer_id:
             raise ReglaDeNegocioViolada("Debe seleccionar un chofer")
 
-        viaje = Viaje(
-            destino=datos.destino,
-            toneladas=datos.toneladas,
-            observaciones=datos.observaciones,
-            estado=estado,
-        )
-        await self._asignar_chofer(viaje, datos.chofer_id)
-        # La patente del viaje puede ser distinta al dominio del catálogo del chofer.
-        if datos.dominio:
-            viaje.dominio = datos.dominio.strip().upper()
-        return viaje
-
-    async def _construir_viaje_agregar(
-        self, datos: CrearViajeRequest, estado: str = "pendiente"
-    ) -> Viaje:
-        """Alta de viaje en campaña existente (chofer opcional)."""
         viaje = Viaje(
             destino=datos.destino,
             toneladas=datos.toneladas,
@@ -386,6 +492,12 @@ class DespachosService:
             viaje.dominio = datos.dominio.strip().upper()
         return viaje
 
+    async def _construir_viaje_agregar(
+        self, datos: CrearViajeRequest, estado: str = "pendiente"
+    ) -> Viaje:
+        """Alta de viaje en campaña existente (chofer opcional)."""
+        return await self._construir_viaje(datos, estado=estado, exigir_chofer=False)
+
     async def _asignar_chofer(self, viaje: Viaje, chofer_id: str) -> None:
         """Asigna un chofer copiando nombre y dominio (desnormalización)."""
         chofer = await self._catalogos.obtener_chofer(chofer_id)
@@ -394,6 +506,65 @@ class DespachosService:
         viaje.chofer_id = chofer.id
         viaje.chofer_nombre = chofer.nombre
         viaje.dominio = chofer.dominio
+
+    async def _aplicar_campos_comerciales(
+        self, despacho: Despacho, datos: CrearDespachoRequest
+    ) -> None:
+        despacho.dador_viaje = (datos.dador_viaje or "").strip()
+        despacho.tarifa_llena = datos.tarifa_llena
+        despacho.distancia_km = datos.distancia_km
+        despacho.cuando = datos.cuando
+        despacho.cuando_fecha = datos.cuando_fecha if datos.cuando == "fecha" else None
+        if datos.tarifa_llena:
+            if datos.distancia_km is None:
+                raise ReglaDeNegocioViolada("Tarifa llena requiere distancia en km")
+            precio, _ = await self._precio_tarifa_nacional(datos.distancia_km)
+            despacho.tarifa_por_tn = precio
+        else:
+            despacho.tarifa_por_tn = datos.tarifa_por_tn
+
+    async def _precio_tarifa_nacional(self, distancia_km: float) -> tuple[float, str]:
+        filas = await self._dao.listar_tarifas_nacionales()
+        if not filas:
+            await self._sembrar_tarifas_default()
+            filas = await self._dao.listar_tarifas_nacionales()
+            await self._sesion.commit()
+        tramos = [(f.km_desde, f.km_hasta, f.precio_por_tn) for f in filas]
+        precio = self._bo.resolver_tarifa_por_km(distancia_km, tramos)
+        vigencia = filas[0].vigencia if filas else "2026-03"
+        for f in filas:
+            if f.km_desde <= distancia_km <= f.km_hasta:
+                vigencia = f.vigencia
+                break
+        return precio, vigencia
+
+    async def _sembrar_tarifas_default(self) -> None:
+        """Tramos orientativos tipo FADEEAC (cereales, vig. marzo 2026)."""
+        # Fuente: FADEEAC tarifa orientativa cereales/oleaginosas (valores demo).
+        defaults = [
+            (0, 50, 12010.0),
+            (51, 100, 25400.0),
+            (101, 150, 33500.0),
+            (151, 200, 40000.0),
+            (201, 250, 49240.0),
+            (251, 300, 56000.0),
+            (301, 400, 65000.0),
+            (401, 500, 76000.0),
+            (501, 700, 92000.0),
+            (701, 1000, 112000.0),
+            (1001, 1500, 146360.0),
+        ]
+        await self._dao.reemplazar_tarifas_nacionales(
+            [
+                TarifaNacional(
+                    km_desde=a,
+                    km_hasta=b,
+                    precio_por_tn=p,
+                    vigencia="2026-03",
+                )
+                for a, b, p in defaults
+            ]
+        )
 
     async def _publicar_activacion(self, despacho: Despacho) -> None:
         await bus_eventos.publicar(

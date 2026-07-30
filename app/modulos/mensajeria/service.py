@@ -8,6 +8,10 @@ from app.modulos.despachos.contrato import ContratoDespachos, DespachosLocal
 from app.modulos.mensajeria.bo import MensajeriaBO
 from app.modulos.mensajeria.dao import MensajeriaDAO
 from app.modulos.mensajeria.models import Conversacion, Mensaje
+from app.modulos.mensajeria.puerto_whatsapp import (
+    NotificadorWhatsApp,
+    NotificadorWhatsAppStub,
+)
 from app.modulos.mensajeria.schemas import (
     ConversacionResponse,
     EnviarMensajeRequest,
@@ -16,13 +20,14 @@ from app.modulos.mensajeria.schemas import (
 
 
 class MensajeriaService:
-    """Casos de uso del chat admin ↔ chofer."""
+    """Casos de uso del chat admin ↔ chofer / transportista."""
 
     def __init__(
         self,
         sesion: AsyncSession,
         catalogos: ContratoCatalogos | None = None,
         despachos: ContratoDespachos | None = None,
+        whatsapp: NotificadorWhatsApp | None = None,
     ) -> None:
         self._sesion = sesion
         self._dao = MensajeriaDAO(sesion)
@@ -30,6 +35,7 @@ class MensajeriaService:
         self._catalogos = catalogos or CatalogosLocal(sesion)
         # Contrato de despachos para reflejar el estado actual del viaje.
         self._despachos = despachos or DespachosLocal(sesion)
+        self._whatsapp = whatsapp or NotificadorWhatsAppStub()
 
     async def listar_conversaciones(self) -> list[ConversacionResponse]:
         conversaciones = await self._dao.listar_conversaciones()
@@ -76,6 +82,7 @@ class MensajeriaService:
             raise ReglaDeNegocioViolada(f"Chofer inexistente: {chofer_id}")
 
         conversacion = Conversacion(
+            tipo="chofer",
             chofer_id=chofer.id,
             chofer_nombre=chofer.nombre,
             dominio=chofer.dominio,
@@ -115,6 +122,57 @@ class MensajeriaService:
         conversacion.destino = destino
         await self._sesion.commit()
 
+    async def publicar_oferta_transportistas(
+        self,
+        *,
+        despacho_id: str,
+        viaje_id: str,
+        origen: str,
+        destino: str,
+        mensaje: str,
+    ) -> int:
+        """Crea hilos con empresas activas e inserta la oferta (agente plantilla)."""
+        empresas = await self._catalogos.listar_transportistas_activos()
+        enviados = 0
+        for empresa in empresas:
+            conversacion = await self._dao.buscar_por_transportista_viaje(
+                empresa.id, viaje_id
+            )
+            if conversacion is None:
+                conversacion = Conversacion(
+                    tipo="transportista",
+                    transportista_id=empresa.id,
+                    chofer_id=None,
+                    chofer_nombre=empresa.nombre,
+                    dominio="EMP",
+                    despacho_id=despacho_id,
+                    viaje_id=viaje_id,
+                    origen=origen,
+                    destino=destino,
+                )
+                await self._dao.guardar_conversacion(conversacion)
+            else:
+                conversacion.origen = origen
+                conversacion.destino = destino
+                conversacion.despacho_id = despacho_id
+
+            await self._dao.agregar_mensaje(
+                Mensaje(
+                    conversacion_id=conversacion.id,
+                    autor="sistema",
+                    texto=mensaje,
+                    leido=False,
+                )
+            )
+            conversacion.no_leidos = self._bo.calcular_no_leidos(
+                conversacion.no_leidos, "sistema"
+            )
+            # Stub WhatsApp: no envía nada en v1.
+            await self._whatsapp.enviar(empresa.id, mensaje)
+            enviados += 1
+        await self._sesion.commit()
+        return enviados
+
     # ------------------------------- Privados -------------------------------
 
     async def _buscar_o_fallar(self, conversacion_id: str) -> Conversacion:
@@ -130,7 +188,7 @@ class MensajeriaService:
             viaje = await self._despachos.obtener_viaje(
                 conversacion.despacho_id, conversacion.viaje_id
             )
-            if viaje is not None and viaje.estado != "borrador":
+            if viaje is not None and viaje.estado not in {"borrador"}:
                 estado_viaje = viaje.estado
 
         return ConversacionResponse(

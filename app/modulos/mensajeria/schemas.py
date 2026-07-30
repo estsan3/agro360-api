@@ -9,7 +9,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-EstadoViajeChat = Literal["pendiente", "en_viaje", "retrasado", "completado"]
+EstadoViajeChat = Literal[
+    "pendiente",
+    "en_viaje",
+    "retrasado",
+    "completado",
+    "en_busqueda_transportistas",
+]
 
 
 class MensajeResponse(BaseModel):

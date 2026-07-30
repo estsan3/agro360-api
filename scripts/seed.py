@@ -7,7 +7,7 @@ en dev (si la base está vacía) o manualmente con:
 """
 
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from app.core.database import crear_tablas, fabrica_sesiones
 from app.core.seguridad import hashear_password
@@ -24,6 +24,8 @@ from app.modulos.catalogos.models import (
     Transportista,
 )
 from app.modulos.despachos.models import Despacho, Viaje
+from app.modulos.liquidaciones.bo import LiquidacionesBO
+from app.modulos.liquidaciones.models import MovimientoCtacte
 from app.modulos.mensajeria.models import Conversacion, Mensaje
 
 # Credenciales de demo (las mismas que el mock del front).
@@ -662,6 +664,107 @@ _CONVERSACIONES = [
 ]
 
 
+def _movimientos_flete_demo(
+    *,
+    transportista_id: str,
+    detalle: str,
+    toneladas: float,
+    tarifa: float,
+    dador_viaje: str,
+    fecha: date,
+    sufijo: str,
+    tarifa_default: float = 28000.0,
+    comision_pct: float = 8.0,
+    iva_pct: float = 21.0,
+    ley_pct: float = 0.6,
+) -> list[MovimientoCtacte]:
+    """Arma los 5 renglones de un flete (misma lógica que LiquidacionesService)."""
+    prefs = {
+        "flete": "FL",
+        "iva_flete": "IVAF",
+        "comision": "COM",
+        "iva_comision": "IVAC",
+        "ley_25413": "LEY",
+    }
+    detalles = {
+        "flete": detalle,
+        "iva_flete": "IVA flete",
+        "comision": "Comisión",
+        "iva_comision": "IVA comisión",
+        "ley_25413": "Imp. Ley 25.413",
+    }
+    lineas = LiquidacionesBO.calcular_movimientos_flete(
+        toneladas=toneladas,
+        tarifa=tarifa or tarifa_default,
+        comision_pct=comision_pct,
+        iva_pct=iva_pct,
+        ley_pct=ley_pct,
+    )
+    return [
+        MovimientoCtacte(
+            transportista_id=transportista_id,
+            fecha=fecha,
+            concepto=concepto,
+            comprobante=f"{prefs[concepto]}-{sufijo}",
+            detalle=detalles[concepto],
+            dador_viaje=dador_viaje,
+            toneladas=toneladas if concepto == "flete" else None,
+            tarifa=tarifa if concepto == "flete" else None,
+            debe=debe,
+            haber=haber,
+        )
+        for concepto, debe, haber in lineas
+    ]
+
+
+def _sembrar_cuenta_corriente_demo() -> list[MovimientoCtacte]:
+    """Fletes y movimientos manuales para probar Liquidaciones."""
+    hoy = date.today()
+    movs: list[MovimientoCtacte] = []
+    fletes = [
+        ("t-1", "Flete Rosario - Terminal", 32.0, 28500.0, "COFCO", 18, "SEED01"),
+        ("t-1", "Flete Bahía Blanca - Terminal", 30.0, 31000.0, "FEDEA", 14, "SEED02"),
+        ("t-1", "Flete Necochea - Puerto Quequén", 30.5, 29500.0, "COFCO", 9, "SEED03"),
+        ("t-1", "Flete Puerto San Martín", 28.5, 30000.0, "FEDEA", 4, "SEED04"),
+        ("t-2", "Flete Buenos Aires - Puerto", 29.0, 32000.0, "COFCO", 12, "SEED05"),
+        ("t-2", "Flete Rosario - Terminal", 31.0, 28000.0, "Otro", 6, "SEED06"),
+        ("t-3", "Flete Bahía Blanca - Terminal", 33.0, 30500.0, "FEDEA", 10, "SEED07"),
+        ("t-3", "Flete Necochea - Puerto Quequén", 28.0, 29000.0, "COFCO", 2, "SEED08"),
+    ]
+    for tid, detalle, tn, tarifa, dador, dias, sufijo in fletes:
+        movs.extend(
+            _movimientos_flete_demo(
+                transportista_id=tid,
+                detalle=detalle,
+                toneladas=tn,
+                tarifa=tarifa,
+                dador_viaje=dador,
+                fecha=hoy - timedelta(days=dias),
+                sufijo=sufijo,
+            )
+        )
+    manuales = [
+        ("t-1", "gasoil", "Carga YPF ruta 9", 85000.0, 0.0, 7),
+        ("t-1", "transferencia", "Pago parcial liquidación quincena", 0.0, 450000.0, 3),
+        ("t-1", "anticipo", "Anticipo campaña soja", 120000.0, 0.0, 1),
+        ("t-2", "cheque", "Cheque diferido 30d", 0.0, 200000.0, 5),
+        ("t-3", "gasoil", "Vale gasoil Bahía", 42000.0, 0.0, 8),
+    ]
+    for tid, concepto, detalle, debe, haber, dias in manuales:
+        movs.append(
+            MovimientoCtacte(
+                transportista_id=tid,
+                fecha=hoy - timedelta(days=dias),
+                concepto=concepto,
+                comprobante=f"MAN-{concepto[:3].upper()}{dias:02d}",
+                detalle=detalle,
+                debe=debe,
+                haber=haber,
+            )
+        )
+    return movs
+
+
 async def sembrar_datos_demo() -> None:
     """Inserta usuarios, catálogos, campañas y conversaciones de demo."""
     async with fabrica_sesiones() as sesion:
@@ -749,6 +852,9 @@ async def sembrar_datos_demo() -> None:
                     for mid, autor, texto, fecha, leido in mensajes
                 ]
             )
+
+        # Cuenta corriente: fletes + movimientos manuales (t-1, t-2, t-3).
+        sesion.add_all(_sembrar_cuenta_corriente_demo())
 
         await sesion.commit()
 

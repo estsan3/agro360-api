@@ -24,7 +24,22 @@ class MensajeriaDAO:
 
     async def buscar_por_chofer(self, chofer_id: str) -> Conversacion | None:
         resultado = await self._sesion.execute(
-            select(Conversacion).where(Conversacion.chofer_id == chofer_id)
+            select(Conversacion).where(
+                Conversacion.tipo == "chofer",
+                Conversacion.chofer_id == chofer_id,
+            )
+        )
+        return resultado.scalar_one_or_none()
+
+    async def buscar_por_transportista_viaje(
+        self, transportista_id: str, viaje_id: str
+    ) -> Conversacion | None:
+        resultado = await self._sesion.execute(
+            select(Conversacion).where(
+                Conversacion.tipo == "transportista",
+                Conversacion.transportista_id == transportista_id,
+                Conversacion.viaje_id == viaje_id,
+            )
         )
         return resultado.scalar_one_or_none()
 
