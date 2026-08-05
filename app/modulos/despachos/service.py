@@ -7,7 +7,8 @@ módulos:
   otros módulos escuchan sin acoplarse.
 """
 
-from datetime import date
+from datetime import UTC, date, datetime
+import base64
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,7 @@ from app.core.excepciones import RecursoNoEncontrado, ReglaDeNegocioViolada
 from app.modulos.catalogos.contrato import CatalogosLocal, ContratoCatalogos
 from app.modulos.despachos.bo import DespachoBO
 from app.modulos.despachos.dao import DespachoDAO
-from app.modulos.despachos.models import Despacho, TarifaNacional, Viaje
+from app.modulos.despachos.models import Despacho, TarifaNacional, Viaje, ViajeAdjunto
 from app.modulos.despachos.schemas import (
     ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
@@ -27,8 +28,11 @@ from app.modulos.despachos.schemas import (
     DespachoResponse,
     DuplicarDespachoRequest,
     ResolverTarifaResponse,
+    SubirAdjuntoViajeRequest,
     TarifaNacionalItem,
     TarifaNacionalResponse,
+    ViajeAdjuntoDetalleResponse,
+    ViajeAdjuntoResponse,
 )
 from app.modulos.lista_espera.contrato import ContratoListaEspera, ListaEsperaLocal
 
@@ -315,6 +319,7 @@ class DespachosService:
             raise RecursoNoEncontrado("Viaje no encontrado en esa campaña")
 
         if datos.chofer_id is not None:
+            self._bo.validar_reasignacion_chofer(viaje)
             await self._asignar_chofer(viaje, datos.chofer_id)
         if datos.observaciones is not None:
             viaje.observaciones = datos.observaciones
@@ -322,9 +327,14 @@ class DespachosService:
             viaje.progreso = datos.progreso
 
         estado_cambio_a_completado = False
+        estado_cambio_a_cancelado = False
         if datos.estado is not None and datos.estado != viaje.estado:
-            self._bo.aplicar_estado_viaje(viaje, datos.estado)
-            estado_cambio_a_completado = datos.estado == "completado"
+            if datos.estado == "cancelado":
+                self._bo.cancelar_viaje(viaje)
+                estado_cambio_a_cancelado = True
+            else:
+                self._bo.aplicar_estado_viaje(viaje, datos.estado)
+                estado_cambio_a_completado = datos.estado == "completado"
 
         await self._sesion.commit()
 
@@ -336,6 +346,17 @@ class DespachosService:
                     datos={"despacho_id": despacho.id, "viaje_id": viaje.id},
                 )
             )
+        elif estado_cambio_a_cancelado:
+            await bus_eventos.publicar(
+                EventoDominio(
+                    nombre="despachos.viaje.cancelado",
+                    datos={
+                        "despacho_id": despacho.id,
+                        "viaje_id": viaje.id,
+                        "chofer_id": viaje.chofer_id,
+                    },
+                )
+            )
         elif datos.estado == "retrasado":
             await bus_eventos.publicar(
                 EventoDominio(
@@ -344,6 +365,123 @@ class DespachosService:
                 )
             )
         return DespachoResponse.model_validate(despacho)
+
+    async def cancelar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
+        """Cancela un viaje (estado terminal cancelado)."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        self._bo.cancelar_viaje(viaje)
+        await self._sesion.commit()
+        await bus_eventos.publicar(
+            EventoDominio(
+                nombre="despachos.viaje.cancelado",
+                datos={
+                    "despacho_id": despacho.id,
+                    "viaje_id": viaje.id,
+                    "chofer_id": viaje.chofer_id,
+                },
+            )
+        )
+        return DespachoResponse.model_validate(despacho)
+
+    async def listar_adjuntos(
+        self, despacho_id: str, viaje_id: str
+    ) -> list[ViajeAdjuntoResponse]:
+        await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        filas = await self._dao.listar_adjuntos(viaje_id)
+        return [self._adjunto_response(a) for a in filas]
+
+    async def obtener_adjunto(
+        self, despacho_id: str, viaje_id: str, adjunto_id: str
+    ) -> ViajeAdjuntoDetalleResponse:
+        await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        adjunto = await self._dao.buscar_adjunto(viaje_id, adjunto_id)
+        if adjunto is None:
+            raise RecursoNoEncontrado("Adjunto no encontrado")
+        base = self._adjunto_response(adjunto)
+        return ViajeAdjuntoDetalleResponse(**base.model_dump(), data_url=adjunto.data_url)
+
+    async def subir_adjunto(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        datos: SubirAdjuntoViajeRequest,
+    ) -> ViajeAdjuntoResponse:
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        if not datos.data_url.startswith("data:"):
+            raise ReglaDeNegocioViolada("El archivo debe enviarse como data URL")
+        adjunto = ViajeAdjunto(
+            viaje_id=viaje_id,
+            tipo=datos.tipo,
+            nombre=datos.nombre.strip(),
+            mime=datos.mime,
+            data_url=datos.data_url,
+            creado_en=datetime.now(UTC).isoformat(),
+        )
+        await self._dao.guardar_adjunto(adjunto)
+        await self._sesion.commit()
+        return self._adjunto_response(adjunto)
+
+    async def eliminar_adjunto(
+        self, despacho_id: str, viaje_id: str, adjunto_id: str
+    ) -> None:
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        adjunto = await self._dao.buscar_adjunto(viaje_id, adjunto_id)
+        if adjunto is None:
+            raise RecursoNoEncontrado("Adjunto no encontrado")
+        await self._dao.eliminar_adjunto(adjunto)
+        await self._sesion.commit()
+
+    async def generar_ticket_gasoil(
+        self, despacho_id: str, viaje_id: str
+    ) -> ViajeAdjuntoResponse:
+        """Genera un ticket de gasoil interno y lo guarda como adjunto del viaje."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        texto = (
+            "TICKET DE GASOIL — Agro360\n"
+            f"Campaña: {despacho.nombre}\n"
+            f"Viaje: {viaje.id}\n"
+            f"Chofer: {viaje.chofer_nombre}\n"
+            f"Patente: {viaje.dominio}\n"
+            f"Origen: {despacho.origen}\n"
+            f"Destino: {viaje.destino}\n"
+            f"Material: {despacho.material}\n"
+            f"Toneladas: {viaje.toneladas:g}\n"
+            f"Emitido: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}\n"
+        )
+        data_url = (
+            "data:text/plain;base64,"
+            + base64.b64encode(texto.encode("utf-8")).decode("ascii")
+        )
+        adjunto = ViajeAdjunto(
+            viaje_id=viaje.id,
+            tipo="ticket_gasoil",
+            nombre=f"ticket-gasoil-{viaje.id}.txt",
+            mime="text/plain",
+            data_url=data_url,
+            creado_en=datetime.now(UTC).isoformat(),
+        )
+        await self._dao.guardar_adjunto(adjunto)
+        await self._sesion.commit()
+        return self._adjunto_response(adjunto)
+
+    @staticmethod
+    def _adjunto_response(adjunto: ViajeAdjunto) -> ViajeAdjuntoResponse:
+        return ViajeAdjuntoResponse(
+            id=adjunto.id,
+            viaje_id=adjunto.viaje_id,
+            tipo=adjunto.tipo,  # type: ignore[arg-type]
+            nombre=adjunto.nombre,
+            mime=adjunto.mime,
+            creado_en=adjunto.creado_en,
+        )
 
     # ----------------------- Tarifas / búsqueda ---------------------------
 

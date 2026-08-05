@@ -182,3 +182,38 @@ def test_edicion_metadatos_solo_activa(bo):
 
     activo = Despacho(estado="activo")
     bo.validar_edicion_metadatos(activo)
+
+
+def test_cancelar_viaje(bo):
+    viaje = Viaje(estado="pendiente", destino="x", toneladas=1)
+    bo.cancelar_viaje(viaje)
+    assert viaje.estado == "cancelado"
+
+
+def test_cancelar_viaje_completado_falla(bo):
+    viaje = Viaje(estado="completado", destino="x", toneladas=1, progreso=100)
+    with pytest.raises(ReglaDeNegocioViolada):
+        bo.cancelar_viaje(viaje)
+
+
+def test_cerrar_campaña_con_cancelados(bo):
+    from app.modulos.despachos.models import Despacho
+
+    despacho = Despacho(estado="activo")
+    despacho.viajes = [
+        Viaje(estado="completado", destino="x", toneladas=1, progreso=100),
+        Viaje(estado="cancelado", destino="y", toneladas=2),
+    ]
+    bo.cerrar(despacho)
+    assert despacho.estado == "cerrado"
+
+
+def test_reasignar_chofer_permitido(bo):
+    viaje = Viaje(estado="en_viaje", destino="x", toneladas=1, chofer_id="ch-1")
+    bo.validar_reasignacion_chofer(viaje)
+
+
+def test_reasignar_chofer_completado_falla(bo):
+    viaje = Viaje(estado="completado", destino="x", toneladas=1, progreso=100)
+    with pytest.raises(ReglaDeNegocioViolada):
+        bo.validar_reasignacion_chofer(viaje)

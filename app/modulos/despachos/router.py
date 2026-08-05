@@ -18,8 +18,11 @@ from app.modulos.despachos.schemas import (
     DuplicarDespachoRequest,
     ResolverTarifaRequest,
     ResolverTarifaResponse,
+    SubirAdjuntoViajeRequest,
     TarifaNacionalResponse,
     TarifasNacionalesRequest,
+    ViajeAdjuntoDetalleResponse,
+    ViajeAdjuntoResponse,
 )
 from app.modulos.despachos.service import DespachosService
 
@@ -254,6 +257,81 @@ async def rechazar_oferta_lista(
 async def duplicar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
     """Duplica un viaje (mismo chofer, destino y toneladas)."""
     return await DespachosService(sesion).duplicar_viaje(despacho_id, viaje_id)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/cancelar",
+    response_model=DespachoResponse,
+    operation_id="cancelar_viaje",
+)
+async def cancelar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
+    """Cancela un viaje (estado terminal)."""
+    return await DespachosService(sesion).cancelar_viaje(despacho_id, viaje_id)
+
+
+@router.get(
+    "/{despacho_id}/viajes/{viaje_id}/adjuntos",
+    response_model=list[ViajeAdjuntoResponse],
+    operation_id="listar_adjuntos_viaje",
+)
+async def listar_adjuntos(
+    despacho_id: str, viaje_id: str, sesion: Sesion
+) -> list[ViajeAdjuntoResponse]:
+    """Lista los adjuntos de un viaje (ticket gasoil, CPE escaneada, etc.)."""
+    return await DespachosService(sesion).listar_adjuntos(despacho_id, viaje_id)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/adjuntos",
+    response_model=ViajeAdjuntoResponse,
+    status_code=201,
+    operation_id="subir_adjunto_viaje",
+)
+async def subir_adjunto(
+    despacho_id: str,
+    viaje_id: str,
+    datos: SubirAdjuntoViajeRequest,
+    sesion: Sesion,
+) -> ViajeAdjuntoResponse:
+    """Sube un adjunto al viaje (data URL)."""
+    return await DespachosService(sesion).subir_adjunto(despacho_id, viaje_id, datos)
+
+
+@router.get(
+    "/{despacho_id}/viajes/{viaje_id}/adjuntos/{adjunto_id}",
+    response_model=ViajeAdjuntoDetalleResponse,
+    operation_id="obtener_adjunto_viaje",
+)
+async def obtener_adjunto(
+    despacho_id: str, viaje_id: str, adjunto_id: str, sesion: Sesion
+) -> ViajeAdjuntoDetalleResponse:
+    """Devuelve un adjunto con su contenido (data URL)."""
+    return await DespachosService(sesion).obtener_adjunto(despacho_id, viaje_id, adjunto_id)
+
+
+@router.delete(
+    "/{despacho_id}/viajes/{viaje_id}/adjuntos/{adjunto_id}",
+    status_code=204,
+    operation_id="eliminar_adjunto_viaje",
+)
+async def eliminar_adjunto(
+    despacho_id: str, viaje_id: str, adjunto_id: str, sesion: Sesion
+) -> None:
+    """Elimina un adjunto del viaje."""
+    await DespachosService(sesion).eliminar_adjunto(despacho_id, viaje_id, adjunto_id)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/generar-ticket-gasoil",
+    response_model=ViajeAdjuntoResponse,
+    status_code=201,
+    operation_id="generar_ticket_gasoil",
+)
+async def generar_ticket_gasoil(
+    despacho_id: str, viaje_id: str, sesion: Sesion
+) -> ViajeAdjuntoResponse:
+    """Genera un ticket de gasoil interno y lo adjunta al viaje."""
+    return await DespachosService(sesion).generar_ticket_gasoil(despacho_id, viaje_id)
 
 
 @router.delete(

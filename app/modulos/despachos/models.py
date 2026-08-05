@@ -98,3 +98,26 @@ class Viaje(Base):
     observaciones: Mapped[str] = mapped_column(Text, default="")
 
     despacho: Mapped[Despacho] = relationship(back_populates="viajes")
+    adjuntos: Mapped[list["ViajeAdjunto"]] = relationship(
+        back_populates="viaje", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class ViajeAdjunto(Base):
+    """Archivo adjunto a un viaje (ticket gasoil, CPE escaneada, etc.)."""
+
+    __tablename__ = "despachos_viaje_adjunto"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_nuevo_id)
+    viaje_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("despachos_viaje.id"), index=True
+    )
+    # ticket_gasoil | cpe_escaneada | otro
+    tipo: Mapped[str] = mapped_column(String(40))
+    nombre: Mapped[str] = mapped_column(String(200))
+    mime: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+    # Contenido en data URL (mismo patrón que ABM de catálogos).
+    data_url: Mapped[str] = mapped_column(Text)
+    creado_en: Mapped[str] = mapped_column(String(40), default="")
+
+    viaje: Mapped[Viaje] = relationship(back_populates="adjuntos")

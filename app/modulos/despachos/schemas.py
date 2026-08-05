@@ -15,8 +15,32 @@ EstadoViaje = Literal[
     "en_viaje",
     "retrasado",
     "completado",
+    "cancelado",
 ]
 CuandoDespacho = Literal["ahora", "manana", "fecha"]
+TipoAdjuntoViaje = Literal["ticket_gasoil", "cpe_escaneada", "otro"]
+
+
+class ViajeAdjuntoResponse(BaseModel):
+    id: str
+    viaje_id: str
+    tipo: TipoAdjuntoViaje
+    nombre: str
+    mime: str
+    creado_en: str
+
+    model_config = {"from_attributes": True}
+
+
+class ViajeAdjuntoDetalleResponse(ViajeAdjuntoResponse):
+    data_url: str
+
+
+class SubirAdjuntoViajeRequest(BaseModel):
+    tipo: TipoAdjuntoViaje
+    nombre: str = Field(min_length=1, max_length=200)
+    mime: str = Field(default="application/octet-stream", max_length=120)
+    data_url: str = Field(min_length=1)
 
 
 class ViajeResponse(BaseModel):

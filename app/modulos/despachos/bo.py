@@ -22,17 +22,26 @@ from app.modulos.despachos.models import Despacho, Viaje
 
 # Grafo de transiciones válidas de estado de un viaje.
 _TRANSICIONES_VIAJE: dict[str, set[str]] = {
-    "borrador": {"pendiente", "en_viaje", "en_busqueda_transportistas"},
-    "en_busqueda_transportistas": {"borrador", "pendiente"},
-    "pendiente": {"en_viaje", "en_busqueda_transportistas"},
-    "en_viaje": {"retrasado", "completado"},
-    "retrasado": {"en_viaje", "completado"},
+    "borrador": {"pendiente", "en_viaje", "en_busqueda_transportistas", "cancelado"},
+    "en_busqueda_transportistas": {"borrador", "pendiente", "cancelado"},
+    "pendiente": {"en_viaje", "en_busqueda_transportistas", "cancelado"},
+    "en_viaje": {"retrasado", "completado", "cancelado"},
+    "retrasado": {"en_viaje", "completado", "cancelado"},
     "completado": set(),
+    "cancelado": set(),
 }
 
 # Estados en los que un viaje todavía no salió a la ruta.
 _ESTADOS_SIN_INICIAR = {"borrador", "pendiente", "en_busqueda_transportistas"}
 _ESTADOS_ASIGNABLES_LISTA = {"borrador", "pendiente", "en_busqueda_transportistas"}
+_ESTADOS_TERMINALES = {"completado", "cancelado"}
+_ESTADOS_REASIGNABLES = {
+    "borrador",
+    "pendiente",
+    "en_busqueda_transportistas",
+    "en_viaje",
+    "retrasado",
+}
 
 
 class DespachoBO:
@@ -114,15 +123,34 @@ class DespachoBO:
             raise ReglaDeNegocioViolada("La campaña está cerrada")
 
     def validar_cierre(self, despacho: Despacho) -> None:
-        """Solo se cierra una campaña activa con todos los viajes completados."""
+        """Solo se cierra una campaña activa con todos los viajes terminados."""
         if despacho.estado != "activo":
             raise ReglaDeNegocioViolada("Solo se pueden cerrar campañas activas")
         if not despacho.viajes:
             raise ReglaDeNegocioViolada("No se puede cerrar una campaña sin viajes")
-        incompletos = [viaje for viaje in despacho.viajes if viaje.estado != "completado"]
+        incompletos = [
+            viaje for viaje in despacho.viajes if viaje.estado not in _ESTADOS_TERMINALES
+        ]
         if incompletos:
             raise ReglaDeNegocioViolada(
-                f"Quedan {len(incompletos)} viaje(s) sin completar"
+                f"Quedan {len(incompletos)} viaje(s) sin completar ni cancelar"
+            )
+
+    def validar_cancelacion_viaje(self, viaje: Viaje) -> None:
+        if viaje.estado in _ESTADOS_TERMINALES:
+            raise ReglaDeNegocioViolada(
+                f"No se puede cancelar un viaje en estado {viaje.estado}"
+            )
+        self.validar_transicion_viaje(viaje, "cancelado")
+
+    def cancelar_viaje(self, viaje: Viaje) -> None:
+        self.validar_cancelacion_viaje(viaje)
+        viaje.estado = "cancelado"
+
+    def validar_reasignacion_chofer(self, viaje: Viaje) -> None:
+        if viaje.estado not in _ESTADOS_REASIGNABLES:
+            raise ReglaDeNegocioViolada(
+                f"No se puede reasignar chofer en estado {viaje.estado}"
             )
 
     def cerrar(self, despacho: Despacho) -> None:
