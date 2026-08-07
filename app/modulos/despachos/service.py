@@ -84,6 +84,7 @@ class DespachosService:
             fecha_llegada_estimada=fecha_llegada,
         )
         await self._aplicar_campos_comerciales(despacho, datos)
+        self._aplicar_campos_cpe(despacho, datos)
         self._bo.validar_fechas(despacho)
 
         # Alta de los viajes iniciales: nacen en borrador junto con la campaña.
@@ -133,6 +134,7 @@ class DespachosService:
             datos.fecha_inicio, datos.fecha_llegada_estimada
         )
         await self._aplicar_campos_comerciales(despacho, datos)
+        self._aplicar_campos_cpe(despacho, datos)
         self._bo.validar_fechas(despacho)
 
         despacho.viajes.clear()
@@ -194,6 +196,57 @@ class DespachosService:
         await self._sesion.commit()
         return DespachoResponse.model_validate(despacho)
 
+    async def editar_para_intencion_cpe(
+        self, despacho_id: str, datos: CrearDespachoRequest
+    ) -> DespachoResponse:
+        """Actualiza datos de campaña y viajes existentes sin cambiar sus IDs.
+
+        Usado al corregir una intención CPE pendiente/error: el front reenvía
+        el formulario completo y luego llama a reintentar la carta de porte.
+        """
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_edicion_para_intencion_cpe(despacho)
+        await self._validar_referencias(datos)
+
+        if not datos.viajes:
+            raise ReglaDeNegocioViolada(
+                "Debés incluir al menos el viaje asociado a la intención"
+            )
+        for datos_viaje in datos.viajes:
+            if not datos_viaje.id:
+                raise ReglaDeNegocioViolada(
+                    "Cada viaje debe incluir su id para no romper la intención CPE"
+                )
+
+        despacho.nombre = datos.nombre
+        despacho.productor_id = datos.productor_id
+        despacho.campo_id = datos.campo_id
+        despacho.origen = datos.origen
+        despacho.entrada_campo = datos.entrada_campo
+        despacho.material = datos.material
+        despacho.administrador_id = datos.administrador_id
+        despacho.vendedor_id = datos.vendedor_id
+        despacho.fecha_inicio = datos.fecha_inicio
+        despacho.fecha_llegada_estimada = self._resolver_fecha_llegada(
+            datos.fecha_inicio, datos.fecha_llegada_estimada
+        )
+        await self._aplicar_campos_comerciales(despacho, datos)
+        self._aplicar_campos_cpe(despacho, datos)
+        self._bo.validar_fechas(despacho)
+
+        por_id = {viaje.id: viaje for viaje in despacho.viajes}
+        for datos_viaje in datos.viajes:
+            viaje = por_id.get(datos_viaje.id or "")
+            if viaje is None:
+                raise RecursoNoEncontrado(
+                    f"Viaje no encontrado en la campaña: {datos_viaje.id}"
+                )
+            await self._actualizar_viaje_para_intencion(viaje, datos_viaje)
+
+        await self._sesion.commit()
+        await self._sesion.refresh(despacho, attribute_names=["viajes"])
+        return DespachoResponse.model_validate(despacho)
+
     async def duplicar(
         self, despacho_id: str, datos: DuplicarDespachoRequest | None = None
     ) -> DespachoResponse:
@@ -223,6 +276,32 @@ class DespachosService:
             distancia_km=original.distancia_km,
             cuando=original.cuando,
             cuando_fecha=original.cuando_fecha,
+            cpe_habilitada=original.cpe_habilitada,
+            cpe_tipo=original.cpe_tipo,
+            cpe_sucursal=original.cpe_sucursal,
+            cpe_cosecha=original.cpe_cosecha,
+            cpe_cuit_solicitante=original.cpe_cuit_solicitante,
+            cpe_origen_cod_provincia=original.cpe_origen_cod_provincia,
+            cpe_origen_cod_localidad=original.cpe_origen_cod_localidad,
+            cpe_origen_planta=original.cpe_origen_planta,
+            cpe_corresponde_retiro_productor=original.cpe_corresponde_retiro_productor,
+            cpe_es_solicitante_campo=original.cpe_es_solicitante_campo,
+            cpe_destino_cuit=original.cpe_destino_cuit,
+            cpe_destino_es_campo=original.cpe_destino_es_campo,
+            cpe_destino_cod_provincia=original.cpe_destino_cod_provincia,
+            cpe_destino_cod_localidad=original.cpe_destino_cod_localidad,
+            cpe_destino_planta=original.cpe_destino_planta,
+            cpe_peso_tara_kg_default=original.cpe_peso_tara_kg_default,
+            cpe_mercaderia_fumigada=original.cpe_mercaderia_fumigada,
+            cpe_cuit_pagador_flete=original.cpe_cuit_pagador_flete,
+            cpe_cuit_intermediario_flete=original.cpe_cuit_intermediario_flete,
+            cpe_cuit_remitente_comercial_vp=original.cpe_cuit_remitente_comercial_vp,
+            cpe_cuit_remitente_comercial_vs=original.cpe_cuit_remitente_comercial_vs,
+            cpe_cuit_mercado_a_termino=original.cpe_cuit_mercado_a_termino,
+            cpe_cuit_corredor_vp=original.cpe_cuit_corredor_vp,
+            cpe_cuit_corredor_vs=original.cpe_cuit_corredor_vs,
+            cpe_cuit_representante_entregador=original.cpe_cuit_representante_entregador,
+            cpe_cuit_representante_recibidor=original.cpe_cuit_representante_recibidor,
         )
         for viaje in original.viajes:
             copia.viajes.append(
@@ -233,6 +312,13 @@ class DespachosService:
                     destino=viaje.destino,
                     toneladas=viaje.toneladas,
                     observaciones=viaje.observaciones,
+                    cpe_destino_cuit=viaje.cpe_destino_cuit,
+                    cpe_destino_es_campo=viaje.cpe_destino_es_campo,
+                    cpe_destino_cod_provincia=viaje.cpe_destino_cod_provincia,
+                    cpe_destino_cod_localidad=viaje.cpe_destino_cod_localidad,
+                    cpe_destino_planta=viaje.cpe_destino_planta,
+                    cpe_peso_bruto_kg=viaje.cpe_peso_bruto_kg,
+                    cpe_peso_tara_kg=viaje.cpe_peso_tara_kg,
                     estado="borrador",
                     progreso=0,
                 )
@@ -292,6 +378,13 @@ class DespachosService:
             destino=original.destino,
             toneladas=original.toneladas,
             observaciones=original.observaciones,
+            cpe_destino_cuit=original.cpe_destino_cuit,
+            cpe_destino_es_campo=original.cpe_destino_es_campo,
+            cpe_destino_cod_provincia=original.cpe_destino_cod_provincia,
+            cpe_destino_cod_localidad=original.cpe_destino_cod_localidad,
+            cpe_destino_planta=original.cpe_destino_planta,
+            cpe_peso_bruto_kg=original.cpe_peso_bruto_kg,
+            cpe_peso_tara_kg=original.cpe_peso_tara_kg,
             estado="borrador" if despacho.estado == "borrador" else "pendiente",
         )
         despacho.viajes.append(copia)
@@ -714,6 +807,25 @@ class DespachosService:
         """Si el front no informa llegada estimada, usa la fecha de inicio."""
         return fecha_llegada if fecha_llegada is not None else fecha_inicio
 
+    async def _actualizar_viaje_para_intencion(
+        self, viaje: Viaje, datos: CrearViajeRequest
+    ) -> None:
+        """Actualiza un viaje existente preservando id y estado operativo."""
+        viaje.destino = datos.destino
+        viaje.toneladas = datos.toneladas
+        viaje.observaciones = datos.observaciones
+        viaje.cpe_destino_cuit = datos.cpe_destino_cuit
+        viaje.cpe_destino_es_campo = datos.cpe_destino_es_campo
+        viaje.cpe_destino_cod_provincia = datos.cpe_destino_cod_provincia
+        viaje.cpe_destino_cod_localidad = datos.cpe_destino_cod_localidad
+        viaje.cpe_destino_planta = datos.cpe_destino_planta
+        viaje.cpe_peso_bruto_kg = datos.cpe_peso_bruto_kg
+        viaje.cpe_peso_tara_kg = datos.cpe_peso_tara_kg
+        if datos.chofer_id:
+            await self._asignar_chofer(viaje, datos.chofer_id)
+        if datos.dominio:
+            viaje.dominio = datos.dominio.strip().upper()
+
     async def _construir_viaje(
         self,
         datos: CrearViajeRequest,
@@ -730,6 +842,13 @@ class DespachosService:
             toneladas=datos.toneladas,
             observaciones=datos.observaciones,
             estado=estado,
+            cpe_destino_cuit=datos.cpe_destino_cuit,
+            cpe_destino_es_campo=datos.cpe_destino_es_campo,
+            cpe_destino_cod_provincia=datos.cpe_destino_cod_provincia,
+            cpe_destino_cod_localidad=datos.cpe_destino_cod_localidad,
+            cpe_destino_planta=datos.cpe_destino_planta,
+            cpe_peso_bruto_kg=datos.cpe_peso_bruto_kg,
+            cpe_peso_tara_kg=datos.cpe_peso_tara_kg,
         )
         if datos.chofer_id:
             await self._asignar_chofer(viaje, datos.chofer_id)
@@ -767,6 +886,35 @@ class DespachosService:
             despacho.tarifa_por_tn = precio
         else:
             despacho.tarifa_por_tn = datos.tarifa_por_tn
+
+    @staticmethod
+    def _aplicar_campos_cpe(despacho: Despacho, datos: CrearDespachoRequest) -> None:
+        despacho.cpe_habilitada = datos.cpe_habilitada
+        despacho.cpe_tipo = datos.cpe_tipo if datos.cpe_habilitada else None
+        despacho.cpe_sucursal = datos.cpe_sucursal if datos.cpe_habilitada else None
+        despacho.cpe_cosecha = datos.cpe_cosecha if datos.cpe_habilitada else None
+        despacho.cpe_cuit_solicitante = datos.cpe_cuit_solicitante
+        despacho.cpe_origen_cod_provincia = datos.cpe_origen_cod_provincia
+        despacho.cpe_origen_cod_localidad = datos.cpe_origen_cod_localidad
+        despacho.cpe_origen_planta = datos.cpe_origen_planta
+        despacho.cpe_corresponde_retiro_productor = datos.cpe_corresponde_retiro_productor
+        despacho.cpe_es_solicitante_campo = datos.cpe_es_solicitante_campo
+        despacho.cpe_destino_cuit = datos.cpe_destino_cuit
+        despacho.cpe_destino_es_campo = datos.cpe_destino_es_campo
+        despacho.cpe_destino_cod_provincia = datos.cpe_destino_cod_provincia
+        despacho.cpe_destino_cod_localidad = datos.cpe_destino_cod_localidad
+        despacho.cpe_destino_planta = datos.cpe_destino_planta
+        despacho.cpe_peso_tara_kg_default = datos.cpe_peso_tara_kg_default
+        despacho.cpe_mercaderia_fumigada = datos.cpe_mercaderia_fumigada
+        despacho.cpe_cuit_pagador_flete = datos.cpe_cuit_pagador_flete
+        despacho.cpe_cuit_intermediario_flete = datos.cpe_cuit_intermediario_flete
+        despacho.cpe_cuit_remitente_comercial_vp = datos.cpe_cuit_remitente_comercial_vp
+        despacho.cpe_cuit_remitente_comercial_vs = datos.cpe_cuit_remitente_comercial_vs
+        despacho.cpe_cuit_mercado_a_termino = datos.cpe_cuit_mercado_a_termino
+        despacho.cpe_cuit_corredor_vp = datos.cpe_cuit_corredor_vp
+        despacho.cpe_cuit_corredor_vs = datos.cpe_cuit_corredor_vs
+        despacho.cpe_cuit_representante_entregador = datos.cpe_cuit_representante_entregador
+        despacho.cpe_cuit_representante_recibidor = datos.cpe_cuit_representante_recibidor
 
     async def _precio_tarifa_nacional(self, distancia_km: float) -> tuple[float, str]:
         filas = await self._dao.listar_tarifas_nacionales()

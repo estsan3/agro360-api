@@ -49,6 +49,18 @@ class UnidadFlotaResumen:
     tipo_unidad: str
 
 
+@dataclass(frozen=True)
+class ContextoCpeCatalogos:
+    """Datos de maestros necesarios para armar el payload AFIP de una CPE."""
+
+    productor_cuit: str | None
+    codigo_grano_afip: int | None
+    chofer_cuit: str | None
+    transportista_cuit: str | None
+    origen_latitud: float | None
+    origen_longitud: float | None
+
+
 class ContratoCatalogos(Protocol):
     """Interfaz que catálogos garantiza al resto del sistema."""
 
@@ -77,6 +89,15 @@ class ContratoCatalogos(Protocol):
     ) -> UnidadFlotaResumen | None:
         """Valida el trío chofer/camión/transportista para anotar en lista."""
         ...
+
+    async def obtener_contexto_cpe(
+        self,
+        productor_id: str,
+        campo_id: str,
+        material_nombre: str,
+        chofer_id: str | None,
+        entrada_campo: str,
+    ) -> ContextoCpeCatalogos: ...
 
 
 class CatalogosLocal:
@@ -209,4 +230,53 @@ class CatalogosLocal:
             dominio=camion.dominio,
             capacidad_tn=camion.capacidad_tn,
             tipo_unidad=camion.tipo_unidad or "tolva",
+        )
+
+    async def obtener_contexto_cpe(
+        self,
+        productor_id: str,
+        campo_id: str,
+        material_nombre: str,
+        chofer_id: str | None,
+        entrada_campo: str,
+    ) -> ContextoCpeCatalogos:
+        productor = await self._dao.buscar_productor(productor_id)
+        material = await self._dao.buscar_material_por_nombre(material_nombre)
+        campo = await self._dao.buscar_campo(campo_id)
+
+        latitud: float | None = None
+        longitud: float | None = None
+        if campo is not None:
+            puntos = list(campo.puntos_entrada or [])
+            elegido = None
+            for punto in puntos:
+                if punto.id == entrada_campo or punto.nombre == entrada_campo:
+                    elegido = punto
+                    break
+            if elegido is None and puntos:
+                elegido = sorted(puntos, key=lambda p: p.orden)[0]
+            if elegido is not None:
+                latitud = elegido.latitud
+                longitud = elegido.longitud
+
+        chofer_cuit: str | None = None
+        transportista_cuit: str | None = None
+        if chofer_id:
+            chofer = await self._dao.buscar_chofer(chofer_id)
+            if chofer is not None:
+                chofer_cuit = chofer.cuit
+                if chofer.transportista_id:
+                    transportista = await self._dao.buscar_transportista(
+                        chofer.transportista_id
+                    )
+                    if transportista is not None:
+                        transportista_cuit = transportista.cuit
+
+        return ContextoCpeCatalogos(
+            productor_cuit=productor.cuit if productor else None,
+            codigo_grano_afip=material.codigo_grano_afip if material else None,
+            chofer_cuit=chofer_cuit,
+            transportista_cuit=transportista_cuit,
+            origen_latitud=latitud,
+            origen_longitud=longitud,
         )

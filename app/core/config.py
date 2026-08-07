@@ -5,8 +5,13 @@ prefijo `AGRO360_`. Ver `.env.example` en la raíz del repo.
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Raíz del repo (app/core/config.py → parents[2] = agro360-api/).
+_RAIZ_REPO = Path(__file__).resolve().parents[2]
+_DB_SQLITE_DEFAULT = _RAIZ_REPO / "data" / "agro360.db"
 
 
 class Configuracion(BaseSettings):
@@ -22,8 +27,9 @@ class Configuracion(BaseSettings):
     # Entorno de ejecución: dev | test | prod
     entorno: str = "dev"
 
-    # URL de conexión SQLAlchemy (async). SQLite en dev, PostgreSQL al escalar.
-    database_url: str = "sqlite+aiosqlite:///./data/agro360.db"
+    # URL de conexión SQLAlchemy (async). SQLite en path absoluto en dev
+    # (evita bases distintas según el cwd de uvicorn).
+    database_url: str = f"sqlite+aiosqlite:///{_DB_SQLITE_DEFAULT}"
 
     # Seguridad / JWT
     jwt_secreto: str = "cambiar-este-secreto-en-produccion"

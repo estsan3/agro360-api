@@ -202,6 +202,18 @@ class DespachoBO:
         if despacho.estado == "activo":
             raise ReglaDeNegocioViolada("No se puede editar una campaña activa")
 
+
+    def validar_edicion_para_intencion_cpe(self, despacho: Despacho) -> None:
+        """Permite corregir datos CPE de una campaña operable (sin reemplazar viajes)."""
+        if despacho.estado == "cerrado":
+            raise ReglaDeNegocioViolada(
+                "No se puede editar una campaña cerrada para regenerar la CPE"
+            )
+        if despacho.estado not in {"borrador", "activo"}:
+            raise ReglaDeNegocioViolada(
+                f"No se puede editar una campaña en estado {despacho.estado}"
+            )
+
     def activar(self, despacho: Despacho) -> None:
         """Activa la campaña y promueve viajes borrador/búsqueda a pendiente."""
         self.validar_activacion(despacho)

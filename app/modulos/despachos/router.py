@@ -147,6 +147,18 @@ async def actualizar_metadatos(
     return await DespachosService(sesion).actualizar_metadatos(despacho_id, datos)
 
 
+@router.patch(
+    "/{despacho_id}/para-intencion-cpe",
+    response_model=DespachoResponse,
+    operation_id="editar_despacho_para_intencion_cpe",
+)
+async def editar_para_intencion_cpe(
+    despacho_id: str, datos: CrearDespachoRequest, sesion: Sesion
+) -> DespachoResponse:
+    """Corrige campaña/viaje para regenerar una intención CPE sin recrear viajes."""
+    return await DespachosService(sesion).editar_para_intencion_cpe(despacho_id, datos)
+
+
 @router.post(
     "/{despacho_id}/duplicar",
     response_model=DespachoResponse,

@@ -103,7 +103,10 @@ class CatalogosService:
         )
         await self._dao.guardar(productor)
         await self._sesion.commit()
-        return self._productor_response(productor)
+        # Releer con selectinload de puntos_entrada (evita lazy IO sync).
+        recargado = await self._dao.buscar_productor(productor.id)
+        assert recargado is not None
+        return self._productor_response(recargado)
 
     async def agregar_campo(
         self, productor_id: str, datos: CrearCampoRequest
@@ -114,7 +117,9 @@ class CatalogosService:
 
         productor.campos.append(Campo(nombre=datos.nombre))
         await self._sesion.commit()
-        return self._productor_response(productor)
+        recargado = await self._dao.buscar_productor(productor_id)
+        assert recargado is not None
+        return self._productor_response(recargado)
 
     # ------------------------------ Materiales ------------------------------
 
@@ -315,13 +320,43 @@ class CatalogosService:
             campos=[cls._campo_response(c) for c in productor.campos if c.activo],
         )
 
-    @staticmethod
-    def _camiones_agregados(transportista: Transportista) -> list[CamionAgregadoResponse]:
-        return [
-            CamionAgregadoResponse(id=c.id, dominio=c.dominio, modelo=c.modelo)
-            for c in transportista.camiones
-            if c.activo
-        ]
+    @classmethod
+    def _camion_agregado(
+        cls, camion: Camion, flota: list[Camion] | None = None
+    ) -> CamionAgregadoResponse:
+        ui = camion.datos_ui if isinstance(camion.datos_ui, dict) else {}
+        tipo = (camion.tipo_unidad or str(ui.get("tipo", "")) or "tolva").lower()
+        acoplado = str(ui.get("acoplado_dominio", "") or "").strip().upper()
+        if not acoplado and flota:
+            hermana = next(
+                (
+                    c
+                    for c in flota
+                    if c.activo
+                    and c.id != camion.id
+                    and (
+                        (c.tipo_unidad or "").lower()
+                        in {"acoplado", "semi", "semirremolque", "trailer"}
+                        or str((c.datos_ui or {}).get("tipo", "")).lower()
+                        in {"acoplado", "semi", "semirremolque", "trailer"}
+                    )
+                ),
+                None,
+            )
+            if hermana is not None:
+                acoplado = hermana.dominio
+        return CamionAgregadoResponse(
+            id=camion.id,
+            dominio=camion.dominio,
+            modelo=camion.modelo or "",
+            tipo=tipo,
+            acoplado_dominio=acoplado,
+        )
+
+    @classmethod
+    def _camiones_agregados(cls, transportista: Transportista) -> list[CamionAgregadoResponse]:
+        activos = [c for c in transportista.camiones if c.activo]
+        return [cls._camion_agregado(c, activos) for c in activos]
 
     def _chofer_agregado(
         self, chofer: Chofer, transportistas: dict[str, Transportista]
@@ -332,12 +367,27 @@ class CatalogosService:
             else None
         )
         camiones = self._camiones_agregados(transportista) if transportista else []
-        dominio = chofer.dominio or (camiones[0].dominio if camiones else "")
-        modelo = chofer.modelo or (camiones[0].modelo if camiones else "")
+        # Prioriza el camión asignado al chofer para autocompletar la fila de viaje.
+        if chofer.camion_id:
+            camiones = sorted(
+                camiones, key=lambda c: 0 if c.id == chofer.camion_id else 1
+            )
+        asignado = next((c for c in camiones if c.id == chofer.camion_id), None)
+        dominio = (
+            chofer.dominio
+            or (asignado.dominio if asignado else "")
+            or (camiones[0].dominio if camiones else "")
+        )
+        modelo = (
+            chofer.modelo
+            or (asignado.modelo if asignado else "")
+            or (camiones[0].modelo if camiones else "")
+        )
         return ChoferAgregadoResponse(
             id=chofer.id,
             nombre=chofer.nombre,
             transportista_id=chofer.transportista_id,
+            camion_id=chofer.camion_id,
             dominio=dominio or "",
             modelo=modelo or "",
             camiones=camiones,
