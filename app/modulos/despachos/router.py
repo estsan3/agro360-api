@@ -16,6 +16,7 @@ from app.modulos.despachos.schemas import (
     CrearViajeRequest,
     DespachoResponse,
     DuplicarDespachoRequest,
+    IniciarViajeRequest,
     ResolverTarifaRequest,
     ResolverTarifaResponse,
     SubirAdjuntoViajeRequest,
@@ -204,9 +205,14 @@ async def actualizar_viaje(
     response_model=DespachoResponse,
     operation_id="iniciar_viaje",
 )
-async def iniciar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
-    """El viaje sale a la ruta (pasa a en_viaje). Requiere chofer asignado."""
-    return await DespachosService(sesion).iniciar_viaje(despacho_id, viaje_id)
+async def iniciar_viaje(
+    despacho_id: str,
+    viaje_id: str,
+    sesion: Sesion,
+    datos: IniciarViajeRequest | None = None,
+) -> DespachoResponse:
+    """El viaje sale a la ruta (pasa a en_viaje). Requiere chofer y checklist operativo."""
+    return await DespachosService(sesion).iniciar_viaje(despacho_id, viaje_id, datos)
 
 
 @router.post(

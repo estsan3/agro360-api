@@ -1,13 +1,16 @@
 """Capa BO del módulo cartas de porte."""
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.core.excepciones import ReglaDeNegocioViolada
 from app.modulos.cartas_porte.models import CartaPorte
 from app.modulos.cartas_porte.payload import DatosParaPayloadCPE, validar_y_armar_payload
 from app.modulos.catalogos.contrato import ContextoCpeCatalogos
 from app.modulos.despachos.contrato import DatosCpeDespacho, ViajeResumen
+
+TZ_AR = ZoneInfo("America/Argentina/Buenos_Aires")
 
 
 class CartaPorteBO:
@@ -46,6 +49,26 @@ class CartaPorteBO:
             )
         if carta.estado == "anulada":
             raise ReglaDeNegocioViolada("La CPE está anulada")
+
+    ESTADOS_ENVIABLES = frozenset({"pendiente", "error"})
+
+    def validar_envio(self, carta: CartaPorte) -> None:
+        if carta.estado not in self.ESTADOS_ENVIABLES:
+            raise ReglaDeNegocioViolada(
+                "Solo se puede enviar a ARCA una intención pendiente o en error "
+                f"(estado actual: {carta.estado})"
+            )
+        if not carta.payload_afip:
+            raise ReglaDeNegocioViolada("La intención no tiene payload AFIP para enviar")
+
+    def nro_orden_de_payload(self, carta: CartaPorte) -> int | None:
+        valor = (carta.payload_afip or {}).get("nro_orden")
+        if valor is None or valor == "":
+            return None
+        try:
+            return int(valor)
+        except (TypeError, ValueError):
+            return None
 
     def validar_eliminacion(self, carta: CartaPorte) -> None:
         if carta.estado in self.ESTADOS_PROCESADAS or carta.estado == "anulada":
@@ -99,7 +122,11 @@ class CartaPorteBO:
 
         tara = datos.viaje_cpe_peso_tara_kg
         if tara is None:
-            tara = datos.cpe_peso_tara_kg_default if datos.cpe_peso_tara_kg_default is not None else 0
+            tara = (
+                datos.cpe_peso_tara_kg_default
+                if datos.cpe_peso_tara_kg_default is not None
+                else 0
+            )
         if datos.viaje_cpe_peso_bruto_kg is not None:
             bruto = datos.viaje_cpe_peso_bruto_kg
         else:
@@ -136,6 +163,7 @@ class CartaPorteBO:
                 origen_cod_provincia=datos.cpe_origen_cod_provincia,
                 origen_cod_localidad=datos.cpe_origen_cod_localidad,
                 origen_planta=datos.cpe_origen_planta,
+                origen_nro_renspa=datos.cpe_nro_renspa or contexto.campo_nro_renspa,
                 origen_latitud=contexto.origen_latitud,
                 origen_longitud=contexto.origen_longitud,
                 cuit_productor=contexto.productor_cuit,
@@ -158,9 +186,12 @@ class CartaPorteBO:
                 cuit_pagador_flete=datos.cpe_cuit_pagador_flete,
                 cuit_intermediario_flete=datos.cpe_cuit_intermediario_flete,
                 mercaderia_fumigada=datos.cpe_mercaderia_fumigada,
-                codigo_turno=None,
+                codigo_turno=datos.viaje_cpe_codigo_turno or datos.cpe_codigo_turno,
+                dominio_acoplado=datos.viaje_cpe_dominio_acoplado,
                 cuit_remitente_comercial_venta_primaria=datos.cpe_cuit_remitente_comercial_vp,
                 cuit_remitente_comercial_venta_secundaria=datos.cpe_cuit_remitente_comercial_vs,
+                cuit_remitente_comercial_venta_secundaria_2=datos.cpe_cuit_remitente_comercial_vs2,
+                cuit_remitente_comercial_productor=datos.cpe_cuit_remitente_comercial_productor,
                 cuit_mercado_a_termino=datos.cpe_cuit_mercado_a_termino,
                 cuit_corredor_venta_primaria=datos.cpe_cuit_corredor_vp,
                 cuit_corredor_venta_secundaria=datos.cpe_cuit_corredor_vs,
@@ -175,10 +206,26 @@ class CartaPorteBO:
         )
 
     @staticmethod
+    def _parse_hora(valor: str | None) -> time:
+        bruto = (valor or "").strip()
+        if not bruto:
+            return time(8, 0)
+        partes = bruto.split(":")
+        try:
+            hora = int(partes[0])
+            minuto = int(partes[1]) if len(partes) > 1 else 0
+        except (ValueError, IndexError):
+            return time(8, 0)
+        if not (0 <= hora <= 23 and 0 <= minuto <= 59):
+            return time(8, 0)
+        return time(hora, minuto)
+
+    @staticmethod
     def _resolver_fecha_partida(datos: DatosCpeDespacho) -> datetime:
         base = datos.fecha_inicio
         if datos.cuando == "manana":
             base = base + timedelta(days=1)
         elif datos.cuando == "fecha" and datos.cuando_fecha is not None:
             base = datos.cuando_fecha
-        return datetime.combine(base, time(8, 0), tzinfo=UTC)
+        hora = CartaPorteBO._parse_hora(datos.cpe_hora_partida)
+        return datetime.combine(base, hora, tzinfo=TZ_AR)

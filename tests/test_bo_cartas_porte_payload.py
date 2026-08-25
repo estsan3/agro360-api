@@ -17,6 +17,7 @@ def _datos(**overrides) -> DatosParaPayloadCPE:
         origen_cod_provincia=12,
         origen_cod_localidad=1234,
         origen_planta=None,
+        origen_nro_renspa=None,
         origen_latitud=-32.95,
         origen_longitud=-60.65,
         cuit_productor="20111222333",
@@ -79,3 +80,84 @@ def test_rechaza_destino_planta_sin_codigo():
 def test_cuit_invalido():
     with pytest.raises(ReglaDeNegocioViolada, match="CUIT"):
         validar_y_armar_payload(_datos(cuit_chofer="123"))
+
+
+def test_mapeo_soap_autorizar_incluye_campos_wscpe():
+    from app.modulos.cartas_porte.adaptadores.mapeo_soap import armar_solicitud_automotor
+
+    payload = validar_y_armar_payload(_datos())
+    xml = armar_solicitud_automotor(payload, nro_orden=7)
+    assert "<tipoCP>74</tipoCP>" in xml
+    assert "<nroOrden>7</nroOrden>" in xml
+    assert "<codGrano>23</codGrano>" in xml
+    assert "<dominio>AB123CD</dominio>" in xml
+    assert "<cuitPagadorFlete>30712345678</cuitPagadorFlete>" in xml
+    assert "<productor>" in xml
+    assert "<coordenadasGPS>" in xml
+    assert "<latitud><grados>-32</grados>" in xml
+    assert "<longitud><grados>-60</grados>" in xml
+    assert "<destinatario>" in xml
+    assert "<esSolicitanteCampo>true</esSolicitanteCampo>" in xml
+    assert "<nroRenspa>" not in xml
+    assert "<codigoTurno>" not in xml
+
+
+def test_payload_incluye_renspa_y_turno():
+    payload = validar_y_armar_payload(
+        _datos(origen_nro_renspa="12.345.6.78901/00", codigo_turno="COSM6752-14082025")
+    )
+    assert payload["origen"]["nro_renspa"] == "12.345.6.78901/00"
+    assert payload["transporte"]["codigo_turno"] == "COSM6752-14082025"
+
+    from app.modulos.cartas_porte.adaptadores.mapeo_soap import armar_solicitud_automotor
+
+    xml = armar_solicitud_automotor(payload, nro_orden=1)
+    assert "<nroRenspa>12.345.6.78901/00</nroRenspa>" in xml
+    assert "<codigoTurno>COSM6752-14082025</codigoTurno>" in xml
+
+
+def test_payload_incluye_acoplado_vs2_y_cuit_productor():
+    payload = validar_y_armar_payload(
+        _datos(
+            dominio_acoplado="AF495WZ",
+            cuit_remitente_comercial_venta_secundaria_2="30700000002",
+            cuit_remitente_comercial_productor="20111222333",
+        )
+    )
+    assert payload["transporte"]["dominio"] == ["AB123CD", "AF495WZ"]
+    assert payload["intervinientes"]["cuit_remitente_comercial_venta_secundaria_2"] == "30700000002"
+    assert payload["intervinientes"]["cuit_remitente_comercial_productor"] == "20111222333"
+
+    from app.modulos.cartas_porte.adaptadores.mapeo_soap import armar_solicitud_automotor
+
+    xml = armar_solicitud_automotor(payload, nro_orden=1)
+    assert xml.count("<dominio>") == 2
+    assert "<dominio>AF495WZ</dominio>" in xml
+    assert (
+        "<cuitRemitenteComercialVentaSecundaria2>30700000002"
+        "</cuitRemitenteComercialVentaSecundaria2>"
+    ) in xml
+    assert (
+        "<cuitRemitenteComercialProductor>20111222333</cuitRemitenteComercialProductor>"
+    ) in xml
+
+
+def test_mapeo_soap_origen_operador_si_no_es_campo():
+    from app.modulos.cartas_porte.adaptadores.mapeo_soap import armar_solicitud_automotor
+
+    payload = validar_y_armar_payload(
+        _datos(es_solicitante_campo=False, origen_planta=10)
+    )
+    xml = armar_solicitud_automotor(payload, nro_orden=2)
+    assert "<operador>" in xml
+    assert "<planta>10</planta>" in xml
+    assert "<productor>" not in xml
+
+
+def test_mapeo_soap_anular():
+    from app.modulos.cartas_porte.adaptadores.mapeo_soap import armar_solicitud_anular
+
+    xml = armar_solicitud_anular(74, 1, 3)
+    assert "<tipoCPE>74</tipoCPE>" in xml
+    assert "<sucursal>1</sucursal>" in xml
+    assert "<nroOrden>3</nroOrden>" in xml

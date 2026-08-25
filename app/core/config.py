@@ -45,6 +45,13 @@ class Configuracion(BaseSettings):
     # Exponer la API como servidor MCP para agentes de IA.
     mcp_habilitado: bool = False
 
+    # CPE / ARCA: `simulado` (default, sin red) o `afip` (WSAA + WSCPE).
+    cpe_proveedor: str = "simulado"
+    cpe_certificado: str = ""
+    cpe_clave_privada: str = ""
+    cpe_cuit_representada: str = ""
+    cpe_homologacion: bool = True
+
     @property
     def cors_origins_lista(self) -> list[str]:
         """Devuelve los orígenes CORS como lista limpia."""

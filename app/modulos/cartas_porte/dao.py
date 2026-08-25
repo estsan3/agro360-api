@@ -39,6 +39,23 @@ class CartaPorteDAO:
         await self._sesion.flush()
         return carta
 
+    async def proximo_nro_orden(self, sucursal: int) -> int:
+        """Siguiente nroOrden WSCPE para la sucursal (único por CUIT/sucursal)."""
+        resultado = await self._sesion.execute(select(CartaPorte))
+        usados: list[int] = []
+        for carta in resultado.scalars():
+            payload = carta.payload_afip or {}
+            if int(payload.get("sucursal") or 0) != sucursal:
+                continue
+            valor = payload.get("nro_orden")
+            if valor is None or valor == "":
+                continue
+            try:
+                usados.append(int(valor))
+            except (TypeError, ValueError):
+                continue
+        return max(usados, default=0) + 1
+
     async def eliminar(self, carta: CartaPorte) -> None:
         await self._sesion.delete(carta)
         await self._sesion.flush()

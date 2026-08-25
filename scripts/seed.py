@@ -14,6 +14,8 @@ from app.core.database import crear_tablas, fabrica_sesiones
 from app.core.seguridad import hashear_password
 from app.modulos.auth.dao import UsuarioDAO
 from app.modulos.auth.models import Usuario
+from app.modulos.cartas_porte.documento import generar_pdf_cpe_demo
+from app.modulos.cartas_porte.models import CartaPorte
 from app.modulos.catalogos.models import (
     Camion,
     Campo,
@@ -24,8 +26,6 @@ from app.modulos.catalogos.models import (
     ResponsableProductor,
     Transportista,
 )
-from app.modulos.cartas_porte.documento import generar_pdf_cpe_demo
-from app.modulos.cartas_porte.models import CartaPorte
 from app.modulos.despachos.models import Despacho, Viaje
 from app.modulos.liquidaciones.bo import LiquidacionesBO
 from app.modulos.liquidaciones.models import MovimientoCtacte
@@ -449,6 +449,7 @@ def _construir_catalogos_demo() -> tuple[list[Productor], list[Transportista], l
                         nombre=cnombre,
                         productor_id=pid,
                         activo=True,
+                        nro_renspa="12.345.6.78901/00" if len(campos) == 0 else None,
                         datos_ui=_datos_ui_campo(i, loc, prov, loc),
                         puntos_entrada=_construir_puntos_entrada(cid, len(campos), datos),
                     )
@@ -466,6 +467,7 @@ def _construir_catalogos_demo() -> tuple[list[Productor], list[Transportista], l
                     nombre=nombre_campo,
                     productor_id=pid,
                     activo=not (n == CAMPOS_POR_PRODUCTOR and i % 6 == 0),
+                    nro_renspa="12.345.6.78901/00" if len(campos) == 0 else None,
                     datos_ui=datos,
                     puntos_entrada=_construir_puntos_entrada(cid, n, datos),
                 )
@@ -834,6 +836,8 @@ def _extras_cpe_despacho(despacho_id: str) -> dict:
         "cpe_cuit_solicitante": "30700000001",
         "cpe_origen_cod_provincia": 12,
         "cpe_origen_cod_localidad": 1001,
+        "cpe_nro_renspa": "12.345.6.78901/00",
+        "cpe_codigo_turno": "TURNO-DEMO",
         "cpe_corresponde_retiro_productor": True,
         "cpe_es_solicitante_campo": True,
         "cpe_destino_cuit": "30555666777",

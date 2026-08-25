@@ -240,6 +240,7 @@ def campo_a_abm(c: Campo) -> CampoProductorAbm:
         longitud=float(ui.get("longitud", 0) or 0),
         contacto_nombre=str(ui.get("contacto_nombre", "")),
         contacto_telefono=str(ui.get("contacto_telefono", "")),
+        nro_renspa=c.nro_renspa or "",
         puntos_entrada=[
             punto_entrada_a_abm(p) for p in sorted(c.puntos_entrada, key=lambda x: x.orden)
             if p.activo
@@ -299,6 +300,8 @@ def aplicar_campo_ui(c: Campo, datos: dict[str, Any]) -> None:
         "contacto_nombre": datos.get("contacto_nombre", ""),
         "contacto_telefono": datos.get("contacto_telefono", ""),
     }
+    renspa = str(datos.get("nro_renspa", "") or "").strip()
+    c.nro_renspa = renspa or None
 
 
 def texto_busqueda_transportista(t: Transportista) -> str:

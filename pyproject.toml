@@ -20,6 +20,8 @@ pydantic-settings = "^2.6"
 email-validator = "^2.2"
 pyjwt = "^2.10"
 bcrypt = "^4.2"
+# Cliente HTTP para WSAA / WSCPE (también se usa en tests de API).
+httpx = "^0.28"
 
 # Driver de PostgreSQL (usado por docker-compose; en dev local puede seguirse con SQLite).
 asyncpg = "^0.30"
@@ -27,7 +29,6 @@ asyncpg = "^0.30"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
 pytest-asyncio = "^0.24"
-httpx = "^0.28"
 # Ejecuta el lifespan de la app en los tests (crear tablas, suscripciones).
 asgi-lifespan = "^2.1"
 ruff = "^0.8"

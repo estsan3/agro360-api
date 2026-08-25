@@ -63,6 +63,9 @@ class DatosCpeDespacho:
     cpe_origen_cod_provincia: int | None
     cpe_origen_cod_localidad: int | None
     cpe_origen_planta: int | None
+    cpe_nro_renspa: str | None
+    cpe_codigo_turno: str | None
+    cpe_hora_partida: str | None
     cpe_corresponde_retiro_productor: bool
     cpe_es_solicitante_campo: bool
     cpe_destino_cuit: str | None
@@ -81,6 +84,8 @@ class DatosCpeDespacho:
     cpe_cuit_corredor_vs: str | None
     cpe_cuit_representante_entregador: str | None
     cpe_cuit_representante_recibidor: str | None
+    cpe_cuit_remitente_comercial_vs2: str | None
+    cpe_cuit_remitente_comercial_productor: str | None
 
     viaje_cpe_destino_cuit: str | None
     viaje_cpe_destino_es_campo: bool | None
@@ -89,6 +94,8 @@ class DatosCpeDespacho:
     viaje_cpe_destino_planta: int | None
     viaje_cpe_peso_bruto_kg: int | None
     viaje_cpe_peso_tara_kg: int | None
+    viaje_cpe_codigo_turno: str | None
+    viaje_cpe_dominio_acoplado: str | None
 
 
 @dataclass(frozen=True)
@@ -179,6 +186,9 @@ class DespachosLocal:
             cpe_origen_cod_provincia=despacho.cpe_origen_cod_provincia,
             cpe_origen_cod_localidad=despacho.cpe_origen_cod_localidad,
             cpe_origen_planta=despacho.cpe_origen_planta,
+            cpe_nro_renspa=despacho.cpe_nro_renspa,
+            cpe_codigo_turno=despacho.cpe_codigo_turno,
+            cpe_hora_partida=despacho.cpe_hora_partida,
             cpe_corresponde_retiro_productor=bool(despacho.cpe_corresponde_retiro_productor),
             cpe_es_solicitante_campo=bool(despacho.cpe_es_solicitante_campo),
             cpe_destino_cuit=despacho.cpe_destino_cuit,
@@ -197,6 +207,8 @@ class DespachosLocal:
             cpe_cuit_corredor_vs=despacho.cpe_cuit_corredor_vs,
             cpe_cuit_representante_entregador=despacho.cpe_cuit_representante_entregador,
             cpe_cuit_representante_recibidor=despacho.cpe_cuit_representante_recibidor,
+            cpe_cuit_remitente_comercial_vs2=despacho.cpe_cuit_remitente_comercial_vs2,
+            cpe_cuit_remitente_comercial_productor=despacho.cpe_cuit_remitente_comercial_productor,
             viaje_cpe_destino_cuit=viaje.cpe_destino_cuit,
             viaje_cpe_destino_es_campo=viaje.cpe_destino_es_campo,
             viaje_cpe_destino_cod_provincia=viaje.cpe_destino_cod_provincia,
@@ -204,6 +216,8 @@ class DespachosLocal:
             viaje_cpe_destino_planta=viaje.cpe_destino_planta,
             viaje_cpe_peso_bruto_kg=viaje.cpe_peso_bruto_kg,
             viaje_cpe_peso_tara_kg=viaje.cpe_peso_tara_kg,
+            viaje_cpe_codigo_turno=viaje.cpe_codigo_turno,
+            viaje_cpe_dominio_acoplado=viaje.cpe_dominio_acoplado,
         )
 
     async def calcular_metricas(self) -> MetricasDespachos:

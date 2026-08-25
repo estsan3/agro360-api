@@ -44,6 +44,8 @@ class Campo(Base):
         String(36), ForeignKey("catalogos_productor.id")
     )
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Identificador SENASA del establecimiento (WSCPE nroRenspa).
+    nro_renspa: Mapped[str | None] = mapped_column(String(40), nullable=True)
     datos_ui: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     productor: Mapped[Productor] = relationship(back_populates="campos")

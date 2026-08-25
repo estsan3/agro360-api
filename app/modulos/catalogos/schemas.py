@@ -17,6 +17,7 @@ class PuntoEntradaResponse(BaseModel):
 class CampoResponse(BaseModel):
     id: str
     nombre: str
+    nro_renspa: str | None = None
     puntos_entrada: list[PuntoEntradaResponse] = []
 
     model_config = {"from_attributes": True}

@@ -182,13 +182,13 @@ El diferencial del sistema: emite la CPE que respalda legalmente cada viaje de g
 
 - `puerto.py`: interfaz `ProveedorCPE` (`autorizar_cpe_automotor`, `anular_cpe`) con DTOs normalizados.
 - `adaptadores/simulado.py`: genera números de CPE y CTG ficticios con formato real — permite desarrollar y testear sin certificado digital.
-- `adaptadores/afip.py`: esqueleto documentado de la integración real vía **PyAfipWs** (WSAA para el ticket de acceso + WSCPE para autorizar). Incluye el pseudocódigo completo y los endpoints de homologación/producción de ARCA. Se activa cuando haya certificado digital.
+- `adaptadores/afip.py`: WSAA (ticket de acceso) + WSCPE SOAP (`autorizarCPEAutomotor` / `anularCPE`). Se activa con `AGRO360_CPE_PROVEEDOR=afip` y el certificado de testing.
 
-**Trazabilidad SENASA (RENSPA).** SENASA no publica un webservice propio para cartas de porte: su integración se materializa **dentro de la misma CPE**, informando el **RENSPA** (Registro Nacional Sanitario de Productores Agropecuarios) del campo de origen como campo de procedencia del WSCPE (vigente desde julio 2025 vía VISEC + SENASA + ARCA, clave para trazabilidad y EUDR). Por eso no existe un puerto separado hacia SENASA: cuando se complete el adaptador real de AFIP, el RENSPA del productor/campo viajará en la solicitud de autorización de la CPE. Queda pendiente agregar el campo RENSPA al catálogo de campos (módulo `catalogos`) como parte de ese trabajo.
+**Trazabilidad SENASA (RENSPA).** SENASA no publica un webservice propio para cartas de porte: su integración se materializa **dentro de la misma CPE**, informando el **RENSPA** del campo de origen como procedencia del WSCPE. Queda pendiente agregar el campo RENSPA al catálogo de campos.
 
 Reglas de negocio: un viaje solo puede tener una CPE autorizada vigente, debe tener chofer/dominio asignado y no estar completado. Cada intento (autorizado o rechazado) queda registrado para auditoría. Publica `cartas_porte.cpe.autorizada`.
 
-Endpoints: `GET|POST /cartas-porte`, `GET /cartas-porte/{id}`, `POST /cartas-porte/{id}/anular`.
+Endpoints: `GET|POST /cartas-porte`, `GET /cartas-porte/{id}`, `POST /cartas-porte/{id}/enviar`, `POST /cartas-porte/{id}/reintentar`, `POST /cartas-porte/{id}/anular`, `GET /cartas-porte/{id}/documento`.
 
 ### `parametros` — Configuración de negocio
 
@@ -222,7 +222,7 @@ Endpoint: `GET /reporteria/kpis`.
 | Lint | ruff | Reglas E, F, I (imports), UP |
 | Contenedores | Docker + docker-compose | Build multi-etapa, usuario sin privilegios |
 | Agentes de IA | AGENTS.md + fastapi-mcp (opcional) | Servidor MCP en `/mcp` |
-| Integración AFIP | PyAfipWs (a instalar con el certificado) | WSAA + WSCPE, RG 5017/2021 |
+| Integración AFIP | httpx + OpenSSL (WSAA CMS) | WSAA + WSCPE SOAP, RG 5017/2021 |
 
 ---
 
@@ -335,6 +335,11 @@ Todas las variables llevan el prefijo `AGRO360_` y se leen del entorno o de `.en
 | `AGRO360_CORS_ORIGINS` | `http://localhost:4200` | Orígenes permitidos, separados por coma |
 | `AGRO360_SEED_AL_INICIAR` | `true` | Datos de demo si la base está vacía (ignorado en prod) |
 | `AGRO360_MCP_HABILITADO` | `false` | Expone el servidor MCP en `/mcp` |
+| `AGRO360_CPE_PROVEEDOR` | `simulado` | `simulado` (sin red) o `afip` (WSAA + WSCPE) |
+| `AGRO360_CPE_HOMOLOGACION` | `true` | `false` usa endpoints de producción ARCA |
+| `AGRO360_CPE_CUIT_REPRESENTADA` | — | CUIT de 11 dígitos asociada al certificado |
+| `AGRO360_CPE_CERTIFICADO` | — | Ruta al `.crt`/`.pem` de WSASS |
+| `AGRO360_CPE_CLAVE_PRIVADA` | — | Ruta a la clave `.key`/`.pem` |
 
 ---
 
@@ -398,6 +403,6 @@ AGRO360_MCP_HABILITADO=true poetry run uvicorn app.main:app
 1. **PostgreSQL**: cambiar `AGRO360_DATABASE_URL`, descomentar `asyncpg` en `pyproject.toml` y el servicio `db` en `docker-compose.yml`. Agregar Alembic con una carpeta de migraciones por módulo.
 2. **Broker de eventos**: reemplazar el `BusEventos` en memoria por un adaptador a RabbitMQ o Redis Streams, manteniendo la interfaz `publicar`/`suscribir`. Los módulos no cambian.
 3. **Extraer el primer microservicio**: mover la carpeta del módulo a un servicio nuevo, reimplementar su `contrato.py` como cliente HTTP en los consumidores y llevarse sus tablas (ya aisladas por prefijo) a su propia base.
-4. **CPE real contra ARCA/AFIP**: obtener el certificado digital, dar de alta el servicio `wscpe` en WSAA (homologación primero), instalar PyAfipWs, completar `cartas_porte/adaptadores/afip.py` e inyectarlo por configuración en lugar del simulado. Incluye la trazabilidad SENASA: agregar el RENSPA a los campos del catálogo e informarlo como procedencia en la CPE.
+4. **CPE real contra ARCA/AFIP**: con certificado WSASS, `AGRO360_CPE_PROVEEDOR=afip` y el alta de `wscpe`, las intenciones pendientes se impactan con `POST /cartas-porte/{id}/enviar`. Incluye la trazabilidad SENASA: agregar el RENSPA a los campos del catálogo e informarlo como procedencia en la CPE.
 5. **WebSockets** para mensajería y estados de viaje en tiempo real (hoy REST + polling desde el front).
 6. **Guards por rol más granulares** y auditoría de operaciones.

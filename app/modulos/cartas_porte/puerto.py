@@ -2,25 +2,20 @@
 
 Patrón puertos y adaptadores: el service del módulo depende de esta
 interfaz, nunca del SDK concreto. Así se puede desarrollar y testear sin
-certificado de ARCA, y cambiar de librería (PyAfipWs, cliente SOAP
-propio, etc.) sin tocar el negocio.
+certificado de ARCA, y cambiar de librería (cliente SOAP propio, etc.)
+sin tocar el negocio.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
 class SolicitudCPE:
-    """Datos mínimos para pedir la autorización de una CPE automotor."""
+    """Pedido de autorización: payload WSCPE ya validado + nro de orden."""
 
-    material: str
-    origen: str
-    destino: str
-    dominio: str
-    toneladas: float
-    # Código de grano según tabla ARCA/AFIP (viene del catálogo de materiales).
-    codigo_grano_afip: int | None = None
+    payload: dict[str, Any]
+    nro_orden: int
 
 
 @dataclass(frozen=True)
@@ -31,15 +26,18 @@ class ResultadoCPE:
     nro_carta_porte: str | None = None
     nro_ctg: str | None = None
     error: str = ""
+    pdf_base64: str | None = None
 
 
 class ProveedorCPE(Protocol):
     """Contrato que debe cumplir cualquier adaptador de CPE."""
 
     async def autorizar_cpe_automotor(self, solicitud: SolicitudCPE) -> ResultadoCPE:
-        """Solicita la autorización de una carta de porte automotor."""
+        """Solicita la autorización de una carta de porte automotor (74/274)."""
         ...
 
-    async def anular_cpe(self, nro_carta_porte: str) -> ResultadoCPE:
+    async def anular_cpe(
+        self, *, tipo_cpe: int, sucursal: int, nro_orden: int
+    ) -> ResultadoCPE:
         """Anula una carta de porte previamente autorizada."""
         ...

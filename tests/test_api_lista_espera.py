@@ -1,7 +1,7 @@
 """Integración API: lista de espera FIFO, rechazo al fondo y reencole."""
 
 from app.core.database import fabrica_sesiones
-from app.modulos.catalogos.models import Camion, Chofer, Material, Productor, Campo, Transportista
+from app.modulos.catalogos.models import Camion, Campo, Chofer, Material, Productor, Transportista
 
 
 async def _sembrar_catalogos_lista() -> dict[str, str]:
@@ -220,6 +220,7 @@ async def test_anotar_rechazar_al_fondo_y_fifo(cliente, auth_headers):
     iniciar = await cliente.post(
         f"/api/v1/despachos/{despacho['id']}/viajes/{viaje_id}/iniciar",
         headers=auth_headers,
+        json={"checklist_gasoil": True, "checklist_efectivo": True},
     )
     # Puede fallar si aún borrador — activar primero.
     if iniciar.status_code != 200:
@@ -230,6 +231,7 @@ async def test_anotar_rechazar_al_fondo_y_fifo(cliente, auth_headers):
         iniciar = await cliente.post(
             f"/api/v1/despachos/{despacho['id']}/viajes/{viaje_id}/iniciar",
             headers=auth_headers,
+            json={"checklist_gasoil": True, "checklist_efectivo": True},
         )
     assert iniciar.status_code == 200, iniciar.text
 

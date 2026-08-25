@@ -132,6 +132,7 @@ class CampoProductorAbm(BaseModel):
     longitud: float = 0
     contacto_nombre: str = ""
     contacto_telefono: str = ""
+    nro_renspa: str = ""
     puntos_entrada: list[PuntoEntradaAbm] = []
 
 
@@ -204,6 +205,7 @@ class GuardarCampoAbm(BaseModel):
     longitud: float = 0
     contacto_nombre: str = ""
     contacto_telefono: str = ""
+    nro_renspa: str = Field(default="", max_length=40)
     puntos_entrada: list[PuntoEntradaInputAbm] = []
 
 

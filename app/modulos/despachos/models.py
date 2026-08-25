@@ -66,6 +66,12 @@ class Despacho(Base):
     cpe_origen_cod_provincia: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cpe_origen_cod_localidad: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cpe_origen_planta: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Identificador SENASA del establecimiento de origen (WSCPE nroRenspa).
+    cpe_nro_renspa: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Turno que asigna la planta destino; cada viaje puede sobreescribirlo.
+    cpe_codigo_turno: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Hora local de partida (HH:MM) para fechaHoraPartida de WSCPE.
+    cpe_hora_partida: Mapped[str | None] = mapped_column(String(5), nullable=True)
     cpe_corresponde_retiro_productor: Mapped[bool] = mapped_column(Boolean, default=True)
     cpe_es_solicitante_campo: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -94,6 +100,12 @@ class Despacho(Base):
         String(13), nullable=True
     )
     cpe_cuit_representante_recibidor: Mapped[str | None] = mapped_column(
+        String(13), nullable=True
+    )
+    cpe_cuit_remitente_comercial_vs2: Mapped[str | None] = mapped_column(
+        String(13), nullable=True
+    )
+    cpe_cuit_remitente_comercial_productor: Mapped[str | None] = mapped_column(
         String(13), nullable=True
     )
 
@@ -141,6 +153,11 @@ class Viaje(Base):
     cpe_destino_planta: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cpe_peso_bruto_kg: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cpe_peso_tara_kg: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cpe_codigo_turno: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Patente del acoplado / semi (2° dominio WSCPE).
+    cpe_dominio_acoplado: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    checklist_gasoil: Mapped[bool] = mapped_column(Boolean, default=False)
+    checklist_efectivo: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Estados: borrador | en_busqueda_transportistas | pendiente | en_viaje | ...
     estado: Mapped[str] = mapped_column(String(40), default="pendiente")

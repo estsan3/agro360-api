@@ -30,6 +30,7 @@ class DatosParaPayloadCPE:
     origen_cod_provincia: int
     origen_cod_localidad: int
     origen_planta: int | None
+    origen_nro_renspa: str | None
     origen_latitud: float | None
     origen_longitud: float | None
     cuit_productor: str
@@ -59,10 +60,13 @@ class DatosParaPayloadCPE:
     cuit_intermediario_flete: str | None
     mercaderia_fumigada: bool
     codigo_turno: str | None
+    dominio_acoplado: str | None = None
 
     # Intervinientes opcionales
     cuit_remitente_comercial_venta_primaria: str | None = None
     cuit_remitente_comercial_venta_secundaria: str | None = None
+    cuit_remitente_comercial_venta_secundaria_2: str | None = None
+    cuit_remitente_comercial_productor: str | None = None
     cuit_mercado_a_termino: str | None = None
     cuit_corredor_venta_primaria: str | None = None
     cuit_corredor_venta_secundaria: str | None = None
@@ -120,6 +124,10 @@ def validar_y_armar_payload(datos: DatosParaPayloadCPE) -> dict[str, Any]:
     dominio = (datos.dominio or "").strip().upper()
     if not dominio or dominio == "-":
         raise ReglaDeNegocioViolada("El viaje no tiene dominio (patente) asignado")
+    acoplado = (datos.dominio_acoplado or "").strip().upper() or None
+    if acoplado == dominio:
+        acoplado = None
+    dominios = [dominio] + ([acoplado] if acoplado else [])
 
     cuit_solicitante = _cuit_limpio(datos.cuit_solicitante, "CUIT solicitante")
     cuit_productor = _cuit_limpio(datos.cuit_productor, "CUIT productor")
@@ -144,6 +152,8 @@ def validar_y_armar_payload(datos: DatosParaPayloadCPE) -> dict[str, Any]:
         "planta": datos.origen_planta,
         "cuit_productor": cuit_productor,
     }
+    if datos.origen_nro_renspa:
+        origen["nro_renspa"] = datos.origen_nro_renspa.strip()
     if datos.origen_latitud is not None and datos.origen_longitud is not None:
         origen["coordenadas_gps"] = {
             "latitud": decimal_a_gms(datos.origen_latitud),
@@ -171,6 +181,16 @@ def validar_y_armar_payload(datos: DatosParaPayloadCPE) -> dict[str, Any]:
             "cuit_remitente_comercial_venta_secundaria": _cuit_limpio(
                 datos.cuit_remitente_comercial_venta_secundaria,
                 "CUIT remitente comercial VS",
+                obligatorio=False,
+            ),
+            "cuit_remitente_comercial_venta_secundaria_2": _cuit_limpio(
+                datos.cuit_remitente_comercial_venta_secundaria_2,
+                "CUIT remitente comercial VS2",
+                obligatorio=False,
+            ),
+            "cuit_remitente_comercial_productor": _cuit_limpio(
+                datos.cuit_remitente_comercial_productor,
+                "CUIT remitente comercial productor",
                 obligatorio=False,
             ),
             "cuit_mercado_a_termino": _cuit_limpio(
@@ -213,7 +233,7 @@ def validar_y_armar_payload(datos: DatosParaPayloadCPE) -> dict[str, Any]:
         },
         "transporte": {
             "cuit_transportista": cuit_transportista,
-            "dominio": [dominio],
+            "dominio": dominios,
             "fecha_hora_partida": datos.fecha_hora_partida.replace(microsecond=0).isoformat(),
             "km_recorrer": datos.km_recorrer,
             "cuit_chofer": cuit_chofer,
@@ -227,7 +247,7 @@ def validar_y_armar_payload(datos: DatosParaPayloadCPE) -> dict[str, Any]:
                 obligatorio=False,
             ),
             "mercaderia_fumigada": datos.mercaderia_fumigada,
-            "codigo_turno": datos.codigo_turno,
+            "codigo_turno": (datos.codigo_turno or "").strip() or None,
         },
         "observaciones": datos.observaciones or "",
         "_meta": {

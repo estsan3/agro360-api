@@ -57,6 +57,10 @@ class ViajeResponse(BaseModel):
     cpe_destino_planta: int | None = None
     cpe_peso_bruto_kg: int | None = None
     cpe_peso_tara_kg: int | None = None
+    cpe_codigo_turno: str | None = None
+    cpe_dominio_acoplado: str | None = None
+    checklist_gasoil: bool = False
+    checklist_efectivo: bool = False
     estado: EstadoViaje
     progreso: int
     observaciones: str
@@ -92,6 +96,9 @@ class DespachoResponse(BaseModel):
     cpe_origen_cod_provincia: int | None = None
     cpe_origen_cod_localidad: int | None = None
     cpe_origen_planta: int | None = None
+    cpe_nro_renspa: str | None = None
+    cpe_codigo_turno: str | None = None
+    cpe_hora_partida: str | None = None
     cpe_corresponde_retiro_productor: bool = True
     cpe_es_solicitante_campo: bool = True
     cpe_destino_cuit: str | None = None
@@ -110,6 +117,8 @@ class DespachoResponse(BaseModel):
     cpe_cuit_corredor_vs: str | None = None
     cpe_cuit_representante_entregador: str | None = None
     cpe_cuit_representante_recibidor: str | None = None
+    cpe_cuit_remitente_comercial_vs2: str | None = None
+    cpe_cuit_remitente_comercial_productor: str | None = None
     viajes: list[ViajeResponse] = []
 
     model_config = {"from_attributes": True}
@@ -133,6 +142,8 @@ class CrearViajeRequest(BaseModel):
     cpe_destino_planta: int | None = Field(default=None, ge=1, le=999_999)
     cpe_peso_bruto_kg: int | None = Field(default=None, ge=1, le=88_000)
     cpe_peso_tara_kg: int | None = Field(default=None, ge=0, le=88_000)
+    cpe_codigo_turno: str | None = Field(default=None, max_length=80)
+    cpe_dominio_acoplado: str | None = Field(default=None, max_length=10)
 
 
 class CrearDespachoRequest(BaseModel):
@@ -169,6 +180,11 @@ class CrearDespachoRequest(BaseModel):
     cpe_origen_cod_provincia: int | None = Field(default=None, ge=1, le=99)
     cpe_origen_cod_localidad: int | None = Field(default=None, ge=1)
     cpe_origen_planta: int | None = Field(default=None, ge=1, le=999_999)
+    cpe_nro_renspa: str | None = Field(default=None, max_length=40)
+    cpe_codigo_turno: str | None = Field(default=None, max_length=80)
+    cpe_hora_partida: str | None = Field(
+        default=None, max_length=5, description="Hora local HH:MM de partida"
+    )
     cpe_corresponde_retiro_productor: bool = True
     cpe_es_solicitante_campo: bool = True
     cpe_destino_cuit: str | None = Field(default=None, max_length=13)
@@ -187,6 +203,8 @@ class CrearDespachoRequest(BaseModel):
     cpe_cuit_corredor_vs: str | None = Field(default=None, max_length=13)
     cpe_cuit_representante_entregador: str | None = Field(default=None, max_length=13)
     cpe_cuit_representante_recibidor: str | None = Field(default=None, max_length=13)
+    cpe_cuit_remitente_comercial_vs2: str | None = Field(default=None, max_length=13)
+    cpe_cuit_remitente_comercial_productor: str | None = Field(default=None, max_length=13)
 
     @model_validator(mode="after")
     def validar_cuando_y_tarifa(self) -> "CrearDespachoRequest":
@@ -223,6 +241,17 @@ class CrearDespachoRequest(BaseModel):
                 )
             if self.distancia_km is None:
                 raise ValueError("CPE habilitada requiere distancia_km (km a recorrer)")
+            if self.cpe_hora_partida:
+                hora = self.cpe_hora_partida.strip()
+                partes = hora.split(":")
+                if (
+                    len(partes) != 2
+                    or not partes[0].isdigit()
+                    or not partes[1].isdigit()
+                    or not (0 <= int(partes[0]) <= 23)
+                    or not (0 <= int(partes[1]) <= 59)
+                ):
+                    raise ValueError("cpe_hora_partida debe ser HH:MM (00:00 a 23:59)")
         return self
 
 
@@ -233,6 +262,13 @@ class ActualizarViajeRequest(BaseModel):
     estado: EstadoViaje | None = None
     progreso: int | None = Field(default=None, ge=0, le=100)
     observaciones: str | None = None
+
+
+class IniciarViajeRequest(BaseModel):
+    """Confirmación operativa previa a salir a ruta."""
+
+    checklist_gasoil: bool = False
+    checklist_efectivo: bool = False
 
 
 class ActualizarMetadatosDespachoRequest(BaseModel):

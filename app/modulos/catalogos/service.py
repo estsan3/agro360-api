@@ -6,12 +6,11 @@ from app.core.excepciones import RecursoNoEncontrado
 from app.modulos.auth.contrato import AuthLocal, ContratoAuth
 from app.modulos.catalogos.bo import CatalogosBO
 from app.modulos.catalogos.dao import CatalogosDAO
-from app.modulos.catalogos.models import Campo, Camion, Chofer, Material, Productor, Transportista
+from app.modulos.catalogos.models import Camion, Campo, Chofer, Material, Productor, Transportista
 from app.modulos.catalogos.schemas import (
     ActualizarCamionRequest,
     ActualizarTransportistaRequest,
     CamionAgregadoResponse,
-    CamionResponse,
     CampoResponse,
     CatalogosAgregadosResponse,
     ChoferAgregadoResponse,
@@ -304,6 +303,7 @@ class CatalogosService:
         return CampoResponse(
             id=campo.id,
             nombre=campo.nombre,
+            nro_renspa=campo.nro_renspa,
             puntos_entrada=[
                 PuntoEntradaResponse.model_validate(p)
                 for p in sorted(campo.puntos_entrada, key=lambda item: item.orden)

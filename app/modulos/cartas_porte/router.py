@@ -75,6 +75,26 @@ async def reintentar(carta_id: str, sesion: Sesion) -> CartaPorteResponse:
     return await CartasPorteService(sesion).reintentar(carta_id)
 
 
+@router.post(
+    "/{carta_id}/enviar",
+    response_model=CartaPorteResponse,
+    operation_id="enviar_carta_porte_arca",
+)
+async def enviar(carta_id: str, sesion: Sesion) -> CartaPorteResponse:
+    """Envía la intención pendiente a ARCA (WSCPE) o al adaptador simulado."""
+    return await CartasPorteService(sesion).enviar(carta_id)
+
+
+@router.post(
+    "/{carta_id}/anular",
+    response_model=CartaPorteResponse,
+    operation_id="anular_carta_porte",
+)
+async def anular(carta_id: str, sesion: Sesion) -> CartaPorteResponse:
+    """Anula una CPE ya procesada ante ARCA (o en el adaptador simulado)."""
+    return await CartasPorteService(sesion).anular(carta_id)
+
+
 @router.delete(
     "/{carta_id}",
     status_code=204,

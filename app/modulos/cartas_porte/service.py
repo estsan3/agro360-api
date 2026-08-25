@@ -1,7 +1,7 @@
 """Capa SERVICE del módulo cartas de porte.
 
-Fase actual: arma y persiste la intención con el payload AFIP completo.
-La conexión a homologación ARCA se agregará después (mismo payload).
+Arma y persiste la intención con el payload AFIP completo. El envío a
+ARCA (homologación o producción) ocurre en `enviar`, vía el puerto CPE.
 """
 
 from __future__ import annotations
@@ -12,10 +12,12 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.eventos import EventoDominio, bus_eventos
-from app.core.excepciones import ErrorDeNegocio, RecursoNoEncontrado
+from app.core.excepciones import ErrorDeNegocio, RecursoNoEncontrado, ReglaDeNegocioViolada
+from app.modulos.cartas_porte.adaptadores import crear_proveedor_cpe
 from app.modulos.cartas_porte.bo import CartaPorteBO
 from app.modulos.cartas_porte.dao import CartaPorteDAO
 from app.modulos.cartas_porte.models import CartaPorte
+from app.modulos.cartas_porte.puerto import ProveedorCPE, SolicitudCPE
 from app.modulos.cartas_porte.schemas import CartaPorteResponse, EmitirCartaPorteRequest
 from app.modulos.catalogos.contrato import CatalogosLocal, ContratoCatalogos
 from app.modulos.despachos.contrato import ContratoDespachos, DespachosLocal
@@ -29,12 +31,14 @@ class CartasPorteService:
         sesion: AsyncSession,
         despachos: ContratoDespachos | None = None,
         catalogos: ContratoCatalogos | None = None,
+        proveedor: ProveedorCPE | None = None,
     ) -> None:
         self._sesion = sesion
         self._dao = CartaPorteDAO(sesion)
         self._bo = CartaPorteBO()
         self._despachos = despachos or DespachosLocal(sesion)
         self._catalogos = catalogos or CatalogosLocal(sesion)
+        self._proveedor = proveedor or crear_proveedor_cpe()
 
     async def crear_intencion(self, datos: EmitirCartaPorteRequest) -> CartaPorteResponse:
         """Arma el payload AFIP completo y lo guarda como intención pendiente."""
@@ -83,6 +87,7 @@ class CartasPorteService:
         if carta is None:
             raise RecursoNoEncontrado("Carta de porte no encontrada")
         self._bo.validar_reintento(carta)
+        nro_orden = self._bo.nro_orden_de_payload(carta)
 
         cpe_datos = await self._despachos.obtener_datos_cpe(
             carta.despacho_id, carta.viaje_id
@@ -92,6 +97,8 @@ class CartasPorteService:
 
         try:
             payload = await self._armar_payload(cpe_datos)
+            if nro_orden is not None:
+                payload["nro_orden"] = nro_orden
             carta.payload_afip = payload
             carta.tipo_cpe = int(payload["tipo_cpe"])
             carta.material = cpe_datos.material
@@ -111,6 +118,84 @@ class CartasPorteService:
         carta.intentos += 1
         carta.actualizada_en = datetime.now(UTC)
         await self._sesion.commit()
+        return self._a_response(carta)
+
+    async def enviar(self, carta_id: str) -> CartaPorteResponse:
+        """Impacta la intención pendiente en ARCA (o en el adaptador simulado)."""
+        carta = await self._dao.buscar_por_id(carta_id)
+        if carta is None:
+            raise RecursoNoEncontrado("Carta de porte no encontrada")
+        self._bo.validar_envio(carta)
+
+        nro_orden = self._bo.nro_orden_de_payload(carta)
+        if nro_orden is None:
+            sucursal = int((carta.payload_afip or {}).get("sucursal") or 1)
+            nro_orden = await self._dao.proximo_nro_orden(sucursal)
+            payload = dict(carta.payload_afip or {})
+            payload["nro_orden"] = nro_orden
+            carta.payload_afip = payload
+
+        resultado = await self._proveedor.autorizar_cpe_automotor(
+            SolicitudCPE(payload=carta.payload_afip or {}, nro_orden=nro_orden)
+        )
+        carta.intentos += 1
+        carta.actualizada_en = datetime.now(UTC)
+
+        if resultado.autorizada:
+            carta.estado = "procesada"
+            carta.nro_carta_porte = resultado.nro_carta_porte
+            carta.nro_ctg = resultado.nro_ctg
+            carta.pdf_base64 = resultado.pdf_base64
+            carta.error_detalle = resultado.error or ""
+            await self._sesion.commit()
+            await bus_eventos.publicar(
+                EventoDominio(
+                    nombre="cartas_porte.cpe.autorizada",
+                    datos={
+                        "carta_id": carta.id,
+                        "viaje_id": carta.viaje_id,
+                        "nro_ctg": carta.nro_ctg,
+                    },
+                )
+            )
+            return self._a_response(carta)
+
+        carta.estado = "error"
+        carta.error_detalle = resultado.error or "ARCA rechazó la autorización"
+        await self._sesion.commit()
+        raise ReglaDeNegocioViolada(carta.error_detalle)
+
+    async def anular(self, carta_id: str) -> CartaPorteResponse:
+        carta = await self._dao.buscar_por_id(carta_id)
+        if carta is None:
+            raise RecursoNoEncontrado("Carta de porte no encontrada")
+        self._bo.validar_anulacion(carta)
+        nro_orden = self._bo.nro_orden_de_payload(carta)
+        sucursal = int((carta.payload_afip or {}).get("sucursal") or 1)
+        if nro_orden is None:
+            raise ReglaDeNegocioViolada(
+                "La CPE no tiene nro_orden; no se puede anular en ARCA"
+            )
+
+        resultado = await self._proveedor.anular_cpe(
+            tipo_cpe=carta.tipo_cpe, sucursal=sucursal, nro_orden=nro_orden
+        )
+        carta.intentos += 1
+        carta.actualizada_en = datetime.now(UTC)
+        if not resultado.autorizada:
+            carta.error_detalle = resultado.error or "ARCA rechazó la anulación"
+            await self._sesion.commit()
+            raise ReglaDeNegocioViolada(carta.error_detalle)
+
+        carta.estado = "anulada"
+        carta.error_detalle = ""
+        await self._sesion.commit()
+        await bus_eventos.publicar(
+            EventoDominio(
+                nombre="cartas_porte.cpe.anulada",
+                datos={"carta_id": carta.id, "nro_ctg": carta.nro_ctg},
+            )
+        )
         return self._a_response(carta)
 
     async def eliminar(self, carta_id: str) -> None:

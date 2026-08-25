@@ -183,11 +183,30 @@ class DespachoBO:
         if nuevo_estado == "completado":
             viaje.progreso = 100
 
-    def validar_inicio_viaje(self, viaje: Viaje) -> None:
-        """Para salir a la ruta el viaje necesita chofer asignado."""
+    def validar_inicio_viaje(
+        self,
+        viaje: Viaje,
+        *,
+        checklist_gasoil: bool = False,
+        checklist_efectivo: bool = False,
+    ) -> None:
+        """Para salir a la ruta el viaje necesita chofer, dominio y checklist."""
         if viaje.chofer_id is None:
             raise ReglaDeNegocioViolada(
                 "No se puede iniciar un viaje sin chofer asignado"
+            )
+        dominio = (viaje.dominio or "").strip()
+        if dominio in ("", "-"):
+            raise ReglaDeNegocioViolada(
+                "No se puede iniciar un viaje sin dominio (patente) asignado"
+            )
+        if not checklist_gasoil:
+            raise ReglaDeNegocioViolada(
+                "Confirmá el ticket / control de gasoil para iniciar el viaje"
+            )
+        if not checklist_efectivo:
+            raise ReglaDeNegocioViolada(
+                "Confirmá la entrega de efectivo para iniciar el viaje"
             )
 
     def validar_eliminacion_viaje(self, viaje: Viaje) -> None:

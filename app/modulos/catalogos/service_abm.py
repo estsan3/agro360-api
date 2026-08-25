@@ -10,10 +10,8 @@ from app.modulos.catalogos.abm_mappers import (
     aplicar_chofer_ui,
     aplicar_productor_ui,
     aplicar_transportista_ui,
-    campo_a_abm,
     productor_a_abm,
     productor_detalle_a_abm,
-    responsable_a_abm,
     texto_busqueda_productor,
     texto_busqueda_transportista,
     transportista_a_abm,
@@ -22,7 +20,6 @@ from app.modulos.catalogos.abm_mappers import (
 from app.modulos.catalogos.bo import CatalogosBO
 from app.modulos.catalogos.dao import CatalogosDAO
 from app.modulos.catalogos.models import (
-    Camion,
     Campo,
     Chofer,
     Productor,

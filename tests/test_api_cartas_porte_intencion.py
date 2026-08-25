@@ -35,7 +35,7 @@ async def _sembrar() -> dict[str, str]:
             )
             cam = Camion(
                 id="cm-cpe",
-                dominio="AB123CD",
+                dominio="CP123CE",
                 modelo="Scania",
                 transportista_id="t-cpe",
                 capacidad_tn=40,
@@ -81,6 +81,11 @@ def _payload_despacho(ids: dict[str, str]) -> dict:
         "cpe_cosecha": 2526,
         "cpe_origen_cod_provincia": 12,
         "cpe_origen_cod_localidad": 1001,
+        "cpe_nro_renspa": "12.345.6.78901/00",
+        "cpe_codigo_turno": "TURNO-PEDIDO",
+        "cpe_hora_partida": "20:00",
+        "cpe_cuit_remitente_comercial_vs2": "20111222333",
+        "cpe_cuit_remitente_comercial_productor": "20111222333",
         "cpe_destino_cuit": "30555666777",
         "cpe_destino_es_campo": False,
         "cpe_destino_cod_provincia": 12,
@@ -90,9 +95,11 @@ def _payload_despacho(ids: dict[str, str]) -> dict:
         "viajes": [
             {
                 "chofer_id": ids["chofer_id"],
-                "dominio": "AB123CD",
+                "dominio": "CP123CE",
                 "destino": "Timbúes",
                 "toneladas": 30,
+                "cpe_codigo_turno": "COSM6752-TEST",
+                "cpe_dominio_acoplado": "AF495WZ",
             }
         ],
     }
@@ -109,6 +116,9 @@ async def test_crear_reintentar_y_eliminar_intencion(cliente, auth_headers):
     viaje_id = despacho["viajes"][0]["id"]
     assert despacho["cpe_habilitada"] is True
     assert despacho["cpe_tipo"] == 74
+    assert despacho["cpe_nro_renspa"] == "12.345.6.78901/00"
+    assert despacho["cpe_codigo_turno"] == "TURNO-PEDIDO"
+    assert despacho["viajes"][0]["cpe_codigo_turno"] == "COSM6752-TEST"
 
     intencion = await cliente.post(
         "/api/v1/cartas-porte",
@@ -121,8 +131,21 @@ async def test_crear_reintentar_y_eliminar_intencion(cliente, auth_headers):
     assert carta["tipo_cpe"] == 74
     assert carta["payload_afip"]["tipo_cpe"] == 74
     assert carta["payload_afip"]["datos_carga"]["cod_grano"] == 23
-    assert carta["payload_afip"]["transporte"]["dominio"] == ["AB123CD"]
     assert carta["payload_afip"]["destino"]["planta"] == 150
+    assert carta["payload_afip"]["origen"]["nro_renspa"] == "12.345.6.78901/00"
+    assert carta["payload_afip"]["transporte"]["codigo_turno"] == "COSM6752-TEST"
+    assert carta["payload_afip"]["transporte"]["dominio"] == ["CP123CE", "AF495WZ"]
+    assert carta["payload_afip"]["transporte"]["fecha_hora_partida"].startswith(
+        "2026-08-05T20:00:00"
+    )
+    assert (
+        carta["payload_afip"]["intervinientes"]["cuit_remitente_comercial_venta_secundaria_2"]
+        == "20111222333"
+    )
+    assert (
+        carta["payload_afip"]["intervinientes"]["cuit_remitente_comercial_productor"]
+        == "20111222333"
+    )
     assert carta["nro_ctg"] is None
 
     listado = await cliente.get("/api/v1/cartas-porte", headers=auth_headers)
@@ -241,7 +264,7 @@ async def test_editar_despacho_y_reintentar_intencion(cliente, auth_headers):
                 {
                     "id": viaje_id,
                     "chofer_id": ids["chofer_id"],
-                    "dominio": "AB123CD",
+                    "dominio": "CP123CE",
                     "destino": "San Lorenzo",
                     "toneladas": 32,
                 }
@@ -289,3 +312,50 @@ async def test_flete_corto_274(cliente, auth_headers):
         intencion.json()["payload_afip"]["_meta"]["tipo_cpe_etiqueta"]
         == "Automotor flete corto"
     )
+
+
+async def test_enviar_y_anular_con_adaptador_simulado(cliente, auth_headers):
+    ids = await _sembrar()
+    body = _payload_despacho(ids)
+    body["nombre"] = "Campaña enviar CPE"
+    creado = await cliente.post("/api/v1/despachos", json=body, headers=auth_headers)
+    assert creado.status_code == 201, creado.text
+    despacho = creado.json()
+    viaje_id = despacho["viajes"][0]["id"]
+
+    intencion = await cliente.post(
+        "/api/v1/cartas-porte",
+        json={"despacho_id": despacho["id"], "viaje_id": viaje_id},
+        headers=auth_headers,
+    )
+    assert intencion.status_code == 201
+    carta_id = intencion.json()["id"]
+    assert intencion.json()["estado"] == "pendiente"
+
+    enviado = await cliente.post(
+        f"/api/v1/cartas-porte/{carta_id}/enviar", headers=auth_headers
+    )
+    assert enviado.status_code == 200, enviado.text
+    carta = enviado.json()
+    assert carta["estado"] == "procesada"
+    assert carta["nro_ctg"]
+    assert carta["nro_carta_porte"]
+    assert carta["tiene_documento"] is True
+    assert carta["payload_afip"]["nro_orden"] == 1
+
+    pdf = await cliente.get(
+        f"/api/v1/cartas-porte/{carta_id}/documento", headers=auth_headers
+    )
+    assert pdf.status_code == 200
+    assert pdf.content[:4] == b"%PDF"
+
+    repetir = await cliente.post(
+        f"/api/v1/cartas-porte/{carta_id}/enviar", headers=auth_headers
+    )
+    assert repetir.status_code == 422
+
+    anulado = await cliente.post(
+        f"/api/v1/cartas-porte/{carta_id}/anular", headers=auth_headers
+    )
+    assert anulado.status_code == 200, anulado.text
+    assert anulado.json()["estado"] == "anulada"

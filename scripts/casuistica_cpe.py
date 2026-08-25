@@ -12,9 +12,10 @@ Ejemplos:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
+from app.modulos.cartas_porte.models import CartaPorte
 from app.modulos.catalogos.models import (
     Camion,
     Campo,
@@ -23,7 +24,6 @@ from app.modulos.catalogos.models import (
     PuntoEntrada,
     Transportista,
 )
-from app.modulos.cartas_porte.models import CartaPorte
 from app.modulos.despachos.models import Despacho, Viaje
 
 # ---------------------------------------------------------------------------

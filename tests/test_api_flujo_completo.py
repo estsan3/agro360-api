@@ -28,7 +28,7 @@ async def test_flujo_completo(cliente, auth_headers):
     productor = (
         await cliente.post(
             "/api/v1/catalogos/productores",
-            json={"nombre": "Agro Test SA", "campos": ["Campo Uno"]},
+            json={"nombre": "Agro Test SA", "cuit": "20111222333", "campos": ["Campo Uno"]},
             headers=auth_headers,
         )
     ).json()
@@ -39,13 +39,21 @@ async def test_flujo_completo(cliente, auth_headers):
         json={"nombre": "Soja", "codigo_grano_afip": 23},
         headers=auth_headers,
     )
+    transportista = (
+        await cliente.post(
+            "/api/v1/catalogos/transportistas",
+            json={"nombre": "Transporte Test", "cuit": "30799888777"},
+            headers=auth_headers,
+        )
+    ).json()
     chofer = (
         await cliente.post(
             "/api/v1/catalogos/choferes",
             json={
                 "nombre": "Chofer Test",
-                "transportista_id": "t-1",
+                "transportista_id": transportista["id"],
                 "dominio": "AB123CD",
+                "cuit": "20333444555",
             },
             headers=auth_headers,
         )
@@ -64,6 +72,20 @@ async def test_flujo_completo(cliente, auth_headers):
             "vendedor_id": "v-1",
             "fecha_inicio": "2026-07-01",
             "fecha_llegada_estimada": "2026-07-20",
+            "distancia_km": 250,
+            "cpe_habilitada": True,
+            "cpe_tipo": 74,
+            "cpe_sucursal": 1,
+            "cpe_cosecha": 2526,
+            "cpe_es_solicitante_campo": False,
+            "cpe_origen_cod_provincia": 12,
+            "cpe_origen_cod_localidad": 1001,
+            "cpe_origen_planta": 10,
+            "cpe_destino_cuit": "30555666777",
+            "cpe_destino_es_campo": False,
+            "cpe_destino_cod_provincia": 12,
+            "cpe_destino_cod_localidad": 2002,
+            "cpe_destino_planta": 150,
             "viajes": [
                 {"chofer_id": chofer["id"], "destino": "Puerto BA", "toneladas": 30}
             ],
@@ -82,7 +104,7 @@ async def test_flujo_completo(cliente, auth_headers):
     )
     assert respuesta.json()["estado"] == "activo"
 
-    # 4. Emitir la carta de porte del viaje (adaptador simulado).
+    # 4. Intención de CPE + envío (adaptador simulado).
     viaje_id = despacho["viajes"][0]["id"]
     respuesta = await cliente.post(
         "/api/v1/cartas-porte",
@@ -91,8 +113,16 @@ async def test_flujo_completo(cliente, auth_headers):
     )
     assert respuesta.status_code == 201
     carta = respuesta.json()
-    assert carta["estado"] == "autorizada"
+    assert carta["estado"] == "pendiente"
+
+    enviado = await cliente.post(
+        f"/api/v1/cartas-porte/{carta['id']}/enviar", headers=auth_headers
+    )
+    assert enviado.status_code == 200, enviado.text
+    carta = enviado.json()
+    assert carta["estado"] == "procesada"
     assert carta["nro_ctg"] is not None
+    assert carta["tiene_documento"] is True
 
     # 5. Emitir de nuevo para el mismo viaje debe fallar (regla de negocio).
     respuesta = await cliente.post(
@@ -221,6 +251,7 @@ async def test_contrato_front(cliente, auth_headers):
         await cliente.post(
             f"/api/v1/despachos/{despacho['id']}/viajes/{viaje_id}/iniciar",
             headers=auth_headers,
+            json={"checklist_gasoil": True, "checklist_efectivo": True},
         )
     ).json()
     viaje = next(v for v in despacho["viajes"] if v["id"] == viaje_id)

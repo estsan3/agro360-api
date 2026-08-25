@@ -57,3 +57,31 @@ async def crear_tablas() -> None:
 
     async with engine.begin() as conexion:
         await conexion.run_sync(Base.metadata.create_all)
+        await conexion.run_sync(_agregar_columnas_sqlite_si_faltan)
+
+
+def _agregar_columnas_sqlite_si_faltan(conexion_sync) -> None:
+    """SQLite no altera tablas ya creadas; agrega columnas nuevas de CPE."""
+    if conexion_sync.dialect.name != "sqlite":
+        return
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(conexion_sync)
+    pendientes = (
+        ("despachos_despacho", "cpe_nro_renspa", "VARCHAR(40)"),
+        ("despachos_despacho", "cpe_codigo_turno", "VARCHAR(80)"),
+        ("despachos_despacho", "cpe_hora_partida", "VARCHAR(5)"),
+        ("despachos_despacho", "cpe_cuit_remitente_comercial_vs2", "VARCHAR(13)"),
+        ("despachos_despacho", "cpe_cuit_remitente_comercial_productor", "VARCHAR(13)"),
+        ("despachos_viaje", "cpe_codigo_turno", "VARCHAR(80)"),
+        ("despachos_viaje", "cpe_dominio_acoplado", "VARCHAR(10)"),
+        ("despachos_viaje", "checklist_gasoil", "BOOLEAN DEFAULT 0"),
+        ("despachos_viaje", "checklist_efectivo", "BOOLEAN DEFAULT 0"),
+        ("catalogos_campo", "nro_renspa", "VARCHAR(40)"),
+    )
+    for tabla, columna, tipo in pendientes:
+        if tabla not in inspector.get_table_names():
+            continue
+        existentes = {c["name"] for c in inspector.get_columns(tabla)}
+        if columna not in existentes:
+            conexion_sync.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}"))

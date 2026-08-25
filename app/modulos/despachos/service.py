@@ -7,8 +7,8 @@ módulos:
   otros módulos escuchan sin acoplarse.
 """
 
-from datetime import UTC, date, datetime
 import base64
+from datetime import UTC, date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +27,7 @@ from app.modulos.despachos.schemas import (
     CrearViajeRequest,
     DespachoResponse,
     DuplicarDespachoRequest,
+    IniciarViajeRequest,
     ResolverTarifaResponse,
     SubirAdjuntoViajeRequest,
     TarifaNacionalItem,
@@ -35,6 +36,19 @@ from app.modulos.despachos.schemas import (
     ViajeAdjuntoResponse,
 )
 from app.modulos.lista_espera.contrato import ContratoListaEspera, ListaEsperaLocal
+
+
+def _texto_opcional(valor: str | None) -> str | None:
+    """Normaliza strings vacíos a None (RENSPA, turno, etc.)."""
+    if valor is None:
+        return None
+    limpio = valor.strip()
+    return limpio or None
+
+
+def _dominio_opcional(valor: str | None) -> str | None:
+    limpio = _texto_opcional(valor)
+    return limpio.upper() if limpio else None
 
 
 class DespachosService:
@@ -85,6 +99,7 @@ class DespachosService:
         )
         await self._aplicar_campos_comerciales(despacho, datos)
         self._aplicar_campos_cpe(despacho, datos)
+        await self._heredar_renspa_campo(despacho)
         self._bo.validar_fechas(despacho)
 
         # Alta de los viajes iniciales: nacen en borrador junto con la campaña.
@@ -135,6 +150,7 @@ class DespachosService:
         )
         await self._aplicar_campos_comerciales(despacho, datos)
         self._aplicar_campos_cpe(despacho, datos)
+        await self._heredar_renspa_campo(despacho)
         self._bo.validar_fechas(despacho)
 
         despacho.viajes.clear()
@@ -232,6 +248,7 @@ class DespachosService:
         )
         await self._aplicar_campos_comerciales(despacho, datos)
         self._aplicar_campos_cpe(despacho, datos)
+        await self._heredar_renspa_campo(despacho)
         self._bo.validar_fechas(despacho)
 
         por_id = {viaje.id: viaje for viaje in despacho.viajes}
@@ -284,6 +301,9 @@ class DespachosService:
             cpe_origen_cod_provincia=original.cpe_origen_cod_provincia,
             cpe_origen_cod_localidad=original.cpe_origen_cod_localidad,
             cpe_origen_planta=original.cpe_origen_planta,
+            cpe_nro_renspa=original.cpe_nro_renspa,
+            cpe_codigo_turno=original.cpe_codigo_turno,
+            cpe_hora_partida=original.cpe_hora_partida,
             cpe_corresponde_retiro_productor=original.cpe_corresponde_retiro_productor,
             cpe_es_solicitante_campo=original.cpe_es_solicitante_campo,
             cpe_destino_cuit=original.cpe_destino_cuit,
@@ -302,6 +322,8 @@ class DespachosService:
             cpe_cuit_corredor_vs=original.cpe_cuit_corredor_vs,
             cpe_cuit_representante_entregador=original.cpe_cuit_representante_entregador,
             cpe_cuit_representante_recibidor=original.cpe_cuit_representante_recibidor,
+            cpe_cuit_remitente_comercial_vs2=original.cpe_cuit_remitente_comercial_vs2,
+            cpe_cuit_remitente_comercial_productor=original.cpe_cuit_remitente_comercial_productor,
         )
         for viaje in original.viajes:
             copia.viajes.append(
@@ -319,6 +341,8 @@ class DespachosService:
                     cpe_destino_planta=viaje.cpe_destino_planta,
                     cpe_peso_bruto_kg=viaje.cpe_peso_bruto_kg,
                     cpe_peso_tara_kg=viaje.cpe_peso_tara_kg,
+                    cpe_codigo_turno=viaje.cpe_codigo_turno,
+                    cpe_dominio_acoplado=viaje.cpe_dominio_acoplado,
                     estado="borrador",
                     progreso=0,
                 )
@@ -341,12 +365,24 @@ class DespachosService:
         await self._sesion.commit()
         return DespachoResponse.model_validate(despacho)
 
-    async def iniciar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
+    async def iniciar_viaje(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        datos: IniciarViajeRequest | None = None,
+    ) -> DespachoResponse:
         """El viaje sale a la ruta: pasa a en_viaje."""
         despacho = await self._buscar_o_fallar(despacho_id)
         self._bo.validar_campaña_operable(despacho)
         viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
-        self._bo.validar_inicio_viaje(viaje)
+        checklist = datos or IniciarViajeRequest()
+        self._bo.validar_inicio_viaje(
+            viaje,
+            checklist_gasoil=checklist.checklist_gasoil,
+            checklist_efectivo=checklist.checklist_efectivo,
+        )
+        viaje.checklist_gasoil = checklist.checklist_gasoil
+        viaje.checklist_efectivo = checklist.checklist_efectivo
         self._bo.aplicar_estado_viaje(viaje, "en_viaje")
         await self._sesion.commit()
 
@@ -385,6 +421,8 @@ class DespachosService:
             cpe_destino_planta=original.cpe_destino_planta,
             cpe_peso_bruto_kg=original.cpe_peso_bruto_kg,
             cpe_peso_tara_kg=original.cpe_peso_tara_kg,
+            cpe_codigo_turno=original.cpe_codigo_turno,
+            cpe_dominio_acoplado=original.cpe_dominio_acoplado,
             estado="borrador" if despacho.estado == "borrador" else "pendiente",
         )
         despacho.viajes.append(copia)
@@ -821,6 +859,8 @@ class DespachosService:
         viaje.cpe_destino_planta = datos.cpe_destino_planta
         viaje.cpe_peso_bruto_kg = datos.cpe_peso_bruto_kg
         viaje.cpe_peso_tara_kg = datos.cpe_peso_tara_kg
+        viaje.cpe_codigo_turno = _texto_opcional(datos.cpe_codigo_turno)
+        viaje.cpe_dominio_acoplado = _dominio_opcional(datos.cpe_dominio_acoplado)
         if datos.chofer_id:
             await self._asignar_chofer(viaje, datos.chofer_id)
         if datos.dominio:
@@ -849,6 +889,8 @@ class DespachosService:
             cpe_destino_planta=datos.cpe_destino_planta,
             cpe_peso_bruto_kg=datos.cpe_peso_bruto_kg,
             cpe_peso_tara_kg=datos.cpe_peso_tara_kg,
+            cpe_codigo_turno=_texto_opcional(datos.cpe_codigo_turno),
+            cpe_dominio_acoplado=_dominio_opcional(datos.cpe_dominio_acoplado),
         )
         if datos.chofer_id:
             await self._asignar_chofer(viaje, datos.chofer_id)
@@ -897,6 +939,9 @@ class DespachosService:
         despacho.cpe_origen_cod_provincia = datos.cpe_origen_cod_provincia
         despacho.cpe_origen_cod_localidad = datos.cpe_origen_cod_localidad
         despacho.cpe_origen_planta = datos.cpe_origen_planta
+        despacho.cpe_nro_renspa = _texto_opcional(datos.cpe_nro_renspa)
+        despacho.cpe_codigo_turno = _texto_opcional(datos.cpe_codigo_turno)
+        despacho.cpe_hora_partida = _texto_opcional(datos.cpe_hora_partida)
         despacho.cpe_corresponde_retiro_productor = datos.cpe_corresponde_retiro_productor
         despacho.cpe_es_solicitante_campo = datos.cpe_es_solicitante_campo
         despacho.cpe_destino_cuit = datos.cpe_destino_cuit
@@ -915,6 +960,18 @@ class DespachosService:
         despacho.cpe_cuit_corredor_vs = datos.cpe_cuit_corredor_vs
         despacho.cpe_cuit_representante_entregador = datos.cpe_cuit_representante_entregador
         despacho.cpe_cuit_representante_recibidor = datos.cpe_cuit_representante_recibidor
+        despacho.cpe_cuit_remitente_comercial_vs2 = datos.cpe_cuit_remitente_comercial_vs2
+        despacho.cpe_cuit_remitente_comercial_productor = (
+            datos.cpe_cuit_remitente_comercial_productor
+        )
+
+    async def _heredar_renspa_campo(self, despacho: Despacho) -> None:
+        """Si el pedido no trae RENSPA, usa el del campo de catálogo."""
+        if despacho.cpe_nro_renspa:
+            return
+        renspa = await self._catalogos.obtener_nro_renspa_campo(despacho.campo_id)
+        if renspa:
+            despacho.cpe_nro_renspa = renspa
 
     async def _precio_tarifa_nacional(self, distancia_km: float) -> tuple[float, str]:
         filas = await self._dao.listar_tarifas_nacionales()

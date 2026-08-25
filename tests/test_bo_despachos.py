@@ -65,6 +65,29 @@ def test_iniciar_sin_chofer_falla(bo):
         bo.validar_inicio_viaje(viaje)
 
 
+def test_iniciar_sin_checklist_falla(bo):
+    viaje = Viaje(
+        estado="pendiente",
+        destino="x",
+        toneladas=1,
+        chofer_id="ch-1",
+        dominio="AA123BB",
+    )
+    with pytest.raises(ReglaDeNegocioViolada, match="gasoil"):
+        bo.validar_inicio_viaje(viaje)
+
+
+def test_iniciar_con_checklist_ok(bo):
+    viaje = Viaje(
+        estado="pendiente",
+        destino="x",
+        toneladas=1,
+        chofer_id="ch-1",
+        dominio="AA123BB",
+    )
+    bo.validar_inicio_viaje(viaje, checklist_gasoil=True, checklist_efectivo=True)
+
+
 def test_eliminar_viaje_en_curso_falla(bo):
     """Solo se eliminan viajes que no salieron a la ruta."""
     viaje = Viaje(estado="en_viaje", destino="x", toneladas=1)
