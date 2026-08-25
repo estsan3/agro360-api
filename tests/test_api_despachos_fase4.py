@@ -23,7 +23,7 @@ async def test_cerrar_duplicar_y_metadatos_campaña(cliente: AsyncClient, auth_h
             "entrada_campo": "",
             "material": catalogos["materiales"][0],
             "administrador_id": catalogos["administradores"][0]["id"],
-            "vendedor_id": catalogos["vendedores"][0]["id"],
+            "vendedor_id": (catalogos["vendedores"][0]["id"] if catalogos["vendedores"] else "v-1"),
             "fecha_inicio": "2026-07-01",
             "fecha_llegada_estimada": "2026-07-15",
             "estado": "borrador",
@@ -49,6 +49,7 @@ async def test_cerrar_duplicar_y_metadatos_campaña(cliente: AsyncClient, auth_h
     iniciar = await cliente.post(
         f"/api/v1/despachos/{despacho_id}/viajes/{viaje_id}/iniciar",
         headers=auth_headers,
+        json={"checklist_gasoil": True, "checklist_efectivo": True},
     )
     assert iniciar.status_code == 200
 

@@ -8,11 +8,14 @@ en dev (si la base está vacía) o manualmente con:
 
 import asyncio
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from app.core.database import crear_tablas, fabrica_sesiones
 from app.core.seguridad import hashear_password
 from app.modulos.auth.dao import UsuarioDAO
 from app.modulos.auth.models import Usuario
+from app.modulos.cartas_porte.documento import generar_pdf_cpe_demo
+from app.modulos.cartas_porte.models import CartaPorte
 from app.modulos.catalogos.models import (
     Camion,
     Campo,
@@ -26,6 +29,7 @@ from app.modulos.catalogos.models import (
 from app.modulos.despachos.models import Despacho, Viaje
 from app.modulos.liquidaciones.bo import LiquidacionesBO
 from app.modulos.liquidaciones.models import MovimientoCtacte
+from app.modulos.lista_espera.models import EntradaLista
 from app.modulos.mensajeria.models import Conversacion, Mensaje
 
 # Credenciales de demo (las mismas que el mock del front).
@@ -52,7 +56,8 @@ CAMPOS_POR_PRODUCTOR = 10
 RESPONSABLES_POR_PRODUCTOR = 10
 
 # Códigos de grano según tabla de ARCA/AFIP (consultarTiposGrano).
-_MATERIALES = [("Soja", 23), ("Maíz", 2), ("Girasol", 27), ("Trigo", 1)]
+# Códigos WSCPE consultarTiposGrano (homo): Maíz=19, Soja=23.
+_MATERIALES = [("Soja", 23), ("Maíz", 19), ("Girasol", 27), ("Trigo", 1)]
 
 # Choferes del mock original (referenciados en despachos y mensajería).
 _CHOFERES_CORE = [
@@ -300,6 +305,8 @@ def _construir_camion(
         modelo=modelo,
         transportista_id=transportista_id,
         activo=activo,
+        capacidad_tn=30.0 + (indice_global % 4) * 5.0,
+        tipo_unidad=tipo or "tolva",
         datos_ui=_datos_ui_camion(marca, tipo, indice_global),
     )
 
@@ -386,6 +393,7 @@ def _construir_catalogos_demo() -> tuple[list[Productor], list[Transportista], l
                 nombre=nombre,
                 cuit="30712345671" if tid == "t-1" else "30709876543" if tid == "t-2" else _cuit_demo(100 + i),
                 activo=activo,
+                es_flota_propia=(tid == "t-1"),
                 datos_ui={k: v for k, v in ui.items() if k != "_activo_override"},
                 camiones=camiones,
             )
@@ -412,6 +420,7 @@ def _construir_catalogos_demo() -> tuple[list[Productor], list[Transportista], l
                     nombre=f"{nom} {ape}",
                     transportista_id=tid,
                     camion_id=cm_id,
+                    cuit=_cuit_demo(300 + indice_chofer),
                     activo=j != CHOFERES_POR_TRANSPORTISTA - 1 or i % 9 != 0,
                     datos_ui=_datos_ui_chofer(nom, ape, indice_chofer),
                 )
@@ -440,6 +449,7 @@ def _construir_catalogos_demo() -> tuple[list[Productor], list[Transportista], l
                         nombre=cnombre,
                         productor_id=pid,
                         activo=True,
+                        nro_renspa="12.345.6.78901/00" if len(campos) == 0 else None,
                         datos_ui=_datos_ui_campo(i, loc, prov, loc),
                         puntos_entrada=_construir_puntos_entrada(cid, len(campos), datos),
                     )
@@ -457,6 +467,7 @@ def _construir_catalogos_demo() -> tuple[list[Productor], list[Transportista], l
                     nombre=nombre_campo,
                     productor_id=pid,
                     activo=not (n == CAMPOS_POR_PRODUCTOR and i % 6 == 0),
+                    nro_renspa="12.345.6.78901/00" if len(campos) == 0 else None,
                     datos_ui=datos,
                     puntos_entrada=_construir_puntos_entrada(cid, n, datos),
                 )
@@ -765,6 +776,435 @@ def _sembrar_cuenta_corriente_demo() -> list[MovimientoCtacte]:
     return movs
 
 
+def _sembrar_lista_espera_demo(
+    transportistas: list[Transportista], choferes_lista: list[Chofer]
+) -> list[EntradaLista]:
+    """Cola FIFO de demo: 5 fleteros anotados (sin flota propia).
+
+    Orden: el más antiguo primero (listo para ofrecer al asignar por lista).
+    """
+    ahora = datetime.utcnow()
+    por_id = {t.id: t for t in transportistas}
+    por_chofer = {c.id: c for c in choferes_lista}
+    # Unidades de t-2..t-6 (terceros) con chofer vinculado a camión.
+    candidatos: list[tuple[str, str, str]] = []
+    for tid in ("t-2", "t-3", "t-4", "t-5", "t-6"):
+        t = por_id.get(tid)
+        if t is None or t.es_flota_propia:
+            continue
+        camiones = {c.id: c for c in t.camiones if c.activo}
+        for chofer in choferes_lista:
+            if chofer.transportista_id != tid or not chofer.activo or not chofer.camion_id:
+                continue
+            camion = camiones.get(chofer.camion_id)
+            if camion is None:
+                continue
+            candidatos.append((tid, chofer.id, camion.id))
+            break
+
+    entradas: list[EntradaLista] = []
+    for i, (tid, ch_id, cm_id) in enumerate(candidatos[:5]):
+        t = por_id[tid]
+        chofer = por_chofer[ch_id]
+        camion = next(c for c in t.camiones if c.id == cm_id)
+        entradas.append(
+            EntradaLista(
+                id=f"le-{i + 1}",
+                empresa_id="default",
+                transportista_id=tid,
+                camion_id=cm_id,
+                chofer_id=ch_id,
+                transportista_nombre=t.nombre,
+                chofer_nombre=chofer.nombre,
+                dominio=camion.dominio,
+                capacidad_tn=camion.capacidad_tn,
+                tipo_unidad=camion.tipo_unidad or "tolva",
+                estado="en_espera",
+                anotado_en=ahora - timedelta(hours=5 - i, minutes=i * 7),
+            )
+        )
+    return entradas
+
+
+def _extras_cpe_despacho(despacho_id: str) -> dict:
+    """Campos CPE para campañas demo que alimentan intenciones / payload AFIP."""
+    base_74 = {
+        "cpe_habilitada": True,
+        "cpe_tipo": 74,
+        "cpe_sucursal": 1,
+        "cpe_cosecha": 2526,
+        "cpe_cuit_solicitante": "30700000001",
+        "cpe_origen_cod_provincia": 12,
+        "cpe_origen_cod_localidad": 1001,
+        "cpe_nro_renspa": "12.345.6.78901/00",
+        "cpe_codigo_turno": "TURNO-DEMO",
+        "cpe_corresponde_retiro_productor": True,
+        "cpe_es_solicitante_campo": True,
+        "cpe_destino_cuit": "30555666777",
+        "cpe_destino_es_campo": False,
+        "cpe_destino_cod_provincia": 2,
+        "cpe_destino_cod_localidad": 2002,
+        "cpe_destino_planta": 150,
+        "cpe_peso_tara_kg_default": 15000,
+        "cpe_mercaderia_fumigada": False,
+        "distancia_km": 280.0,
+        "tarifa_por_tn": 49240.0,
+    }
+    por_id = {
+        "d-1": {**base_74},
+        "d-3": {
+            **base_74,
+            "cpe_destino_planta": 220,
+            "cpe_destino_cod_localidad": 2100,
+            "distancia_km": 190.0,
+        },
+        "d-4": {
+            **base_74,
+            "cpe_tipo": 274,
+            "cpe_sucursal": 2,
+            "distancia_km": 45.0,
+            "tarifa_por_tn": 12010.0,
+        },
+        "d-8": {
+            **base_74,
+            "cpe_destino_planta": 310,
+            "distancia_km": 920.0,
+            "tarifa_por_tn": 112000.0,
+        },
+    }
+    return por_id.get(despacho_id, {})
+
+
+def _payload_demo(
+    *,
+    tipo_cpe: int,
+    material: str,
+    origen: str,
+    destino: str,
+    dominio: str,
+    toneladas: float,
+    cod_grano: int,
+    sucursal: int = 1,
+    planta: int = 150,
+) -> dict:
+    """Payload AFIP mínimo pero completo para demos de listado/detalle."""
+    tara = 15000
+    bruto = int(round(toneladas * 1000)) + tara
+    return {
+        "metodo_wscpe": "autorizarCPEAutomotor",
+        "tipo_cpe": tipo_cpe,
+        "sucursal": sucursal,
+        "cuit_solicitante": "30700000001",
+        "origen": {
+            "cod_provincia": 12,
+            "cod_localidad": 1001,
+            "planta": None,
+            "cuit_productor": "20200000001",
+            "coordenadas_gps": {
+                "latitud_decimal": -32.9442,
+                "longitud_decimal": -60.6505,
+            },
+        },
+        "flags": {
+            "corresponde_retiro_productor": True,
+            "es_solicitante_campo": True,
+        },
+        "intervinientes": {},
+        "datos_carga": {
+            "cod_grano": cod_grano,
+            "cosecha": 2526,
+            "peso_bruto": bruto,
+            "peso_tara": tara,
+            "peso_neto": bruto - tara,
+        },
+        "destino": {
+            "cuit": "30555666777",
+            "es_destino_campo": False,
+            "cod_provincia": 2,
+            "cod_localidad": 2002,
+            "planta": planta,
+        },
+        "transporte": {
+            "cuit_transportista": "30712345671",
+            "dominio": [dominio],
+            "fecha_hora_partida": "2026-08-05T08:00:00+00:00",
+            "km_recorrer": 280,
+            "cuit_chofer": "20300000001",
+            "tarifa": 49240.0,
+            "mercaderia_fumigada": False,
+        },
+        "observaciones": "Seed demo Agro360",
+        "_meta": {
+            "material_nombre": material,
+            "origen_descripcion": origen,
+            "destino_descripcion": destino,
+            "tipo_cpe_etiqueta": (
+                "Automotor" if tipo_cpe == 74 else "Automotor flete corto"
+            ),
+        },
+    }
+
+
+def _carta_demo(
+    *,
+    id_: str,
+    despacho_id: str,
+    viaje_id: str,
+    tipo_cpe: int,
+    estado: str,
+    material: str,
+    origen: str,
+    destino: str,
+    dominio: str,
+    toneladas: float,
+    cod_grano: int,
+    nro_carta_porte: str | None = None,
+    nro_ctg: str | None = None,
+    intentos: int = 0,
+    error_detalle: str = "",
+    con_pdf: bool = False,
+    sucursal: int = 1,
+    planta: int = 150,
+) -> CartaPorte:
+    payload = _payload_demo(
+        tipo_cpe=tipo_cpe,
+        material=material,
+        origen=origen,
+        destino=destino,
+        dominio=dominio,
+        toneladas=toneladas,
+        cod_grano=cod_grano,
+        sucursal=sucursal,
+        planta=planta,
+    )
+    pdf = None
+    if con_pdf and nro_carta_porte and nro_ctg:
+        pdf = generar_pdf_cpe_demo(
+            nro_carta_porte=nro_carta_porte,
+            nro_ctg=nro_ctg,
+            tipo_cpe=tipo_cpe,
+            material=material,
+            origen=origen,
+            destino=destino,
+            dominio=dominio,
+            toneladas=toneladas,
+            estado=estado,
+        )
+    return CartaPorte(
+        id=id_,
+        despacho_id=despacho_id,
+        viaje_id=viaje_id,
+        tipo_cpe=tipo_cpe,
+        nro_carta_porte=nro_carta_porte,
+        nro_ctg=nro_ctg,
+        estado=estado,
+        material=material,
+        origen=origen,
+        destino=destino,
+        dominio=dominio,
+        toneladas=toneladas,
+        payload_afip=payload,
+        pdf_base64=pdf,
+        intentos=intentos,
+        error_detalle=error_detalle,
+    )
+
+
+def _sembrar_cartas_porte_demo() -> list[CartaPorte]:
+    """Casuísticas demo: pendiente, error, procesada (74/274) con PDF, anulada."""
+    return [
+        # Procesada automotor 74 — con PDF descargable
+        _carta_demo(
+            id_="cpe-demo-1",
+            despacho_id="d-1",
+            viaje_id="#12345",
+            tipo_cpe=74,
+            estado="procesada",
+            material="Maíz",
+            origen="Rosario, Santa Fe",
+            destino="Buenos Aires - Puerto",
+            dominio="AB123CD",
+            toneladas=28,
+            cod_grano=19,
+            nro_carta_porte="74000000001",
+            nro_ctg="010112345678",
+            con_pdf=True,
+        ),
+        # Procesada flete corto 274 — con PDF
+        _carta_demo(
+            id_="cpe-demo-2",
+            despacho_id="d-3",
+            viaje_id="#12331",
+            tipo_cpe=274,
+            estado="procesada",
+            material="Soja",
+            origen="Pergamino, Buenos Aires",
+            destino="Rosario - Terminal",
+            dominio="BC456CD",
+            toneladas=30,
+            cod_grano=23,
+            nro_carta_porte="27400000002",
+            nro_ctg="010122223333",
+            sucursal=2,
+            planta=220,
+            con_pdf=True,
+        ),
+        # Segunda procesada 74 (viaje ya entregado)
+        _carta_demo(
+            id_="cpe-demo-3",
+            despacho_id="d-3",
+            viaje_id="#12330",
+            tipo_cpe=74,
+            estado="procesada",
+            material="Soja",
+            origen="Pergamino, Buenos Aires",
+            destino="Rosario - Terminal",
+            dominio="EF789GH",
+            toneladas=32,
+            cod_grano=23,
+            nro_carta_porte="74000000003",
+            nro_ctg="010133334444",
+            planta=220,
+            con_pdf=True,
+        ),
+        # Pendiente — lista para enviar a homologación
+        _carta_demo(
+            id_="cpe-demo-4",
+            despacho_id="d-3",
+            viaje_id="#12332",
+            tipo_cpe=74,
+            estado="pendiente",
+            material="Soja",
+            origen="Pergamino, Buenos Aires",
+            destino="Puerto San Martín",
+            dominio="AA123BB",
+            toneladas=28.5,
+            cod_grano=23,
+            planta=310,
+        ),
+        # Error — falló armado/envío (reintentable)
+        _carta_demo(
+            id_="cpe-demo-5",
+            despacho_id="d-1",
+            viaje_id="#12342",
+            tipo_cpe=74,
+            estado="error",
+            material="Maíz",
+            origen="Rosario, Santa Fe",
+            destino="Buenos Aires - Puerto",
+            dominio="XY789ZA",
+            toneladas=30,
+            cod_grano=19,
+            intentos=2,
+            error_detalle=(
+                "ARCA rechazó la solicitud: planta destino 150 no habilitada "
+                "para el CUIT destinatario (demo)."
+            ),
+        ),
+        # Anulada — ya no vigente
+        _carta_demo(
+            id_="cpe-demo-6",
+            despacho_id="d-1",
+            viaje_id="#12340",
+            tipo_cpe=74,
+            estado="anulada",
+            material="Maíz",
+            origen="Rosario, Santa Fe",
+            destino="Buenos Aires - Puerto",
+            dominio="DE456FG",
+            toneladas=29,
+            cod_grano=19,
+            nro_carta_porte="74000000006",
+            nro_ctg="010166667777",
+            intentos=1,
+            error_detalle="Anulada por error de carga (demo).",
+            con_pdf=True,
+        ),
+        # Pendiente flete corto en campaña larga
+        _carta_demo(
+            id_="cpe-demo-7",
+            despacho_id="d-8",
+            viaje_id="#12390",
+            tipo_cpe=274,
+            estado="pendiente",
+            material="Trigo",
+            origen="Salta Capital, Salta",
+            destino="Rosario - Terminal",
+            dominio="EF789GH",
+            toneladas=32,
+            cod_grano=1,
+            sucursal=2,
+            planta=310,
+        ),
+        # Procesada 74 en viaje en curso
+        _carta_demo(
+            id_="cpe-demo-8",
+            despacho_id="d-8",
+            viaje_id="#12391",
+            tipo_cpe=74,
+            estado="procesada",
+            material="Trigo",
+            origen="Salta Capital, Salta",
+            destino="Rosario - Terminal",
+            dominio="AA123BB",
+            toneladas=30.5,
+            cod_grano=1,
+            nro_carta_porte="74000000008",
+            nro_ctg="010188889999",
+            planta=310,
+            con_pdf=True,
+        ),
+    ]
+
+
+def _despacho_lista_espera_demo() -> Despacho:
+    """Campaña activa con viajes sin chofer, pensada para probar asignar-por-lista."""
+    return Despacho(
+        id="d-lista-1",
+        nombre="Demo Lista de Espera",
+        productor_id="p-1",
+        campo_id="c-1",
+        origen="Pergamino, Buenos Aires",
+        entrada_campo="Entrada Norte",
+        material="Soja",
+        administrador_id="a-1",
+        vendedor_id="v-1",
+        fecha_inicio=date(2026, 7, 28),
+        fecha_llegada_estimada=date(2026, 8, 5),
+        estado="activo",
+        dador_viaje="Agro Demo SA",
+        tarifa_por_tn=45000.0,
+        cuando="ahora",
+        observaciones="Viajes sin asignar para probar flota propia + lista FIFO",
+        viajes=[
+            Viaje(
+                id="viaje-lista-1",
+                destino="Rosario - Terminal",
+                toneladas=28,
+                estado="pendiente",
+                progreso=0,
+                observaciones="Probar: Asignar por lista",
+            ),
+            Viaje(
+                id="viaje-lista-2",
+                destino="Puerto San Martín",
+                toneladas=30,
+                estado="pendiente",
+                progreso=0,
+                observaciones="Segundo viaje sin chofer",
+            ),
+            Viaje(
+                id="viaje-lista-3",
+                destino="San Lorenzo - Puerto",
+                toneladas=25,
+                estado="pendiente",
+                progreso=0,
+                observaciones="Tercer viaje sin chofer",
+            ),
+        ],
+    )
+
+
 async def sembrar_datos_demo() -> None:
     """Inserta usuarios, catálogos, campañas y conversaciones de demo."""
     async with fabrica_sesiones() as sesion:
@@ -802,12 +1242,17 @@ async def sembrar_datos_demo() -> None:
         # Despachos con sus viajes (los IDs y estados son los del mock).
         for (id_, nombre, productor, campo, origen, entrada, material, admin,
              vendedor, inicio, llegada, estado, viajes) in _DESPACHOS:
+            extras_cpe = _extras_cpe_despacho(id_)
             sesion.add(
                 Despacho(
                     id=id_, nombre=nombre, productor_id=productor, campo_id=campo,
                     origen=origen, entrada_campo=entrada, material=material,
                     administrador_id=admin, vendedor_id=vendedor,
                     fecha_inicio=inicio, fecha_llegada_estimada=llegada, estado=estado,
+                    distancia_km=extras_cpe.get("distancia_km"),
+                    tarifa_por_tn=extras_cpe.get("tarifa_por_tn"),
+                    **{k: v for k, v in extras_cpe.items()
+                       if k not in ("distancia_km", "tarifa_por_tn")},
                     viajes=[
                         Viaje(
                             id=vid,
@@ -825,6 +1270,40 @@ async def sembrar_datos_demo() -> None:
                     ],
                 )
             )
+
+        # Campaña extra + cola FIFO para probar lista de espera.
+        sesion.add(_despacho_lista_espera_demo())
+        sesion.add_all(_sembrar_lista_espera_demo(transportistas, choferes_lista))
+
+        # Intenciones / CPE demo (pendiente, error, procesada con PDF, anulada, 74/274).
+        sesion.add_all(_sembrar_cartas_porte_demo())
+
+        # Casuística desde CPE PDF reales (Maíz→COFCO, Soja→LDC); nombres sim-* = ilegibles.
+        from scripts.casuistica_cpe import (
+            construir_cartas_casuistica,
+            construir_catalogos_casuistica,
+            construir_despachos_casuistica,
+            texto_gap_analisis_md,
+        )
+
+        prod_cpe, trans_cpe, chof_cpe = construir_catalogos_casuistica()
+        sesion.add_all(prod_cpe)
+        sesion.add_all(trans_cpe)
+        await sesion.flush()
+        sesion.add_all(chof_cpe)
+        await sesion.flush()
+        sesion.add_all(construir_despachos_casuistica())
+        sesion.add_all(construir_cartas_casuistica())
+
+        gap_path = (
+            Path(__file__).resolve().parents[1]
+            / "postman"
+            / "arca-wscpe"
+            / "docs"
+            / "gap-analisis-cpe-agro360.md"
+        )
+        gap_path.parent.mkdir(parents=True, exist_ok=True)
+        gap_path.write_text(texto_gap_analisis_md(), encoding="utf-8")
 
         # Conversaciones vinculadas a los viajes de arriba.
         for (id_, chofer_id, despacho_id, viaje_id, origen, destino, no_leidos,
@@ -860,16 +1339,43 @@ async def sembrar_datos_demo() -> None:
 
 
 if __name__ == "__main__":
+    import sys
+
     # Ejecución manual: crea las tablas y siembra.
+    # Uso: python -m scripts.seed [--force]
     async def _main() -> None:
+        forzar = "--force" in sys.argv
+        if forzar:
+            from app.core.database import Base, engine
+
+            # Registrar metadata de todos los módulos antes de dropear.
+            await crear_tablas()
+            async with engine.begin() as conexion:
+                await conexion.run_sync(Base.metadata.drop_all)
+            print("Base vaciada (--force).")
+
         await crear_tablas()
+        async with fabrica_sesiones() as sesion:
+            ya_habia = await UsuarioDAO(sesion).contar() > 0
         await sembrar_datos_demo()
+        if ya_habia and not forzar:
+            print(
+                "La base ya tenía datos; no se re-sembró. "
+                "Usá: python -m scripts.seed --force"
+            )
+            return
         print(
             f"Seed listo. Login demo: {EMAIL_DEMO} / {PASSWORD_DEMO}\n"
             f"  · {CANTIDAD_TRANSPORTISTAS} transportistas "
             f"({CAMIONES_POR_TRANSPORTISTA} camiones + {CHOFERES_POR_TRANSPORTISTA} choferes c/u)\n"
             f"  · {CANTIDAD_PRODUCTORES} productores "
-            f"({CAMPOS_POR_PRODUCTOR} campos + {RESPONSABLES_POR_PRODUCTOR} responsables c/u)"
+            f"({CAMPOS_POR_PRODUCTOR} campos + {RESPONSABLES_POR_PRODUCTOR} responsables c/u)\n"
+            f"  · Lista de espera: 5 unidades en cola (t-2…)\n"
+            f"  · Campaña 'Demo Lista de Espera' (d-lista-1) con 3 viajes sin asignar\n"
+            f"  · Flota propia: Transportes del Plata (t-1)\n"
+            f"  · Cartas de porte: intenciones demo (pendiente/error/procesada/anulada, 74 y 274)\n"
+            f"  · Casuística CPE PDF: d-cpe-maiz-cofco + d-cpe-soja-ldc "
+            f"(ver postman/arca-wscpe/docs/gap-analisis-cpe-agro360.md)"
         )
 
     asyncio.run(_main())

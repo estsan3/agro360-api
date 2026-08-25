@@ -10,15 +10,20 @@ from app.core.dependencias import obtener_usuario_actual, requerir_rol
 from app.modulos.despachos.schemas import (
     ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
+    AsignarPorListaRequest,
     BuscarTransportistasRequest,
     CrearDespachoRequest,
     CrearViajeRequest,
     DespachoResponse,
     DuplicarDespachoRequest,
+    IniciarViajeRequest,
     ResolverTarifaRequest,
     ResolverTarifaResponse,
+    SubirAdjuntoViajeRequest,
     TarifaNacionalResponse,
     TarifasNacionalesRequest,
+    ViajeAdjuntoDetalleResponse,
+    ViajeAdjuntoResponse,
 )
 from app.modulos.despachos.service import DespachosService
 
@@ -143,6 +148,18 @@ async def actualizar_metadatos(
     return await DespachosService(sesion).actualizar_metadatos(despacho_id, datos)
 
 
+@router.patch(
+    "/{despacho_id}/para-intencion-cpe",
+    response_model=DespachoResponse,
+    operation_id="editar_despacho_para_intencion_cpe",
+)
+async def editar_para_intencion_cpe(
+    despacho_id: str, datos: CrearDespachoRequest, sesion: Sesion
+) -> DespachoResponse:
+    """Corrige campaña/viaje para regenerar una intención CPE sin recrear viajes."""
+    return await DespachosService(sesion).editar_para_intencion_cpe(despacho_id, datos)
+
+
 @router.post(
     "/{despacho_id}/duplicar",
     response_model=DespachoResponse,
@@ -188,9 +205,65 @@ async def actualizar_viaje(
     response_model=DespachoResponse,
     operation_id="iniciar_viaje",
 )
-async def iniciar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
-    """El viaje sale a la ruta (pasa a en_viaje). Requiere chofer asignado."""
-    return await DespachosService(sesion).iniciar_viaje(despacho_id, viaje_id)
+async def iniciar_viaje(
+    despacho_id: str,
+    viaje_id: str,
+    sesion: Sesion,
+    datos: IniciarViajeRequest | None = None,
+) -> DespachoResponse:
+    """El viaje sale a la ruta (pasa a en_viaje). Requiere chofer y checklist operativo."""
+    return await DespachosService(sesion).iniciar_viaje(despacho_id, viaje_id, datos)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/asignar-por-lista",
+    response_model=DespachoResponse,
+    operation_id="asignar_viaje_por_lista",
+)
+async def asignar_por_lista(
+    despacho_id: str,
+    viaje_id: str,
+    sesion: Sesion,
+    datos: AsignarPorListaRequest = AsignarPorListaRequest(),
+) -> DespachoResponse:
+    """Asigna flota propia si hay; si no, ofrece al siguiente de la lista FIFO."""
+    return await DespachosService(sesion).asignar_por_lista(despacho_id, viaje_id, datos)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/aceptar-oferta-lista",
+    response_model=DespachoResponse,
+    operation_id="aceptar_oferta_lista_viaje",
+)
+async def aceptar_oferta_lista(
+    despacho_id: str,
+    viaje_id: str,
+    sesion: Sesion,
+    entrada_id: Annotated[str, Query()],
+    empresa_id: Annotated[str, Query()] = "default",
+) -> DespachoResponse:
+    """Acepta la oferta de lista de espera y asigna el chofer al viaje."""
+    return await DespachosService(sesion).aceptar_oferta_lista(
+        despacho_id, viaje_id, entrada_id, empresa_id=empresa_id
+    )
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/rechazar-oferta-lista",
+    response_model=DespachoResponse,
+    operation_id="rechazar_oferta_lista_viaje",
+)
+async def rechazar_oferta_lista(
+    despacho_id: str,
+    viaje_id: str,
+    sesion: Sesion,
+    empresa_id: Annotated[str, Query()] = "default",
+    tipo_unidad: Annotated[str | None, Query()] = None,
+) -> DespachoResponse:
+    """Rechaza la oferta (unidad al fondo) y ofrece al siguiente apto."""
+    return await DespachosService(sesion).rechazar_oferta_lista(
+        despacho_id, viaje_id, empresa_id=empresa_id, tipo_unidad=tipo_unidad
+    )
 
 
 @router.post(
@@ -202,6 +275,81 @@ async def iniciar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> Desp
 async def duplicar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
     """Duplica un viaje (mismo chofer, destino y toneladas)."""
     return await DespachosService(sesion).duplicar_viaje(despacho_id, viaje_id)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/cancelar",
+    response_model=DespachoResponse,
+    operation_id="cancelar_viaje",
+)
+async def cancelar_viaje(despacho_id: str, viaje_id: str, sesion: Sesion) -> DespachoResponse:
+    """Cancela un viaje (estado terminal)."""
+    return await DespachosService(sesion).cancelar_viaje(despacho_id, viaje_id)
+
+
+@router.get(
+    "/{despacho_id}/viajes/{viaje_id}/adjuntos",
+    response_model=list[ViajeAdjuntoResponse],
+    operation_id="listar_adjuntos_viaje",
+)
+async def listar_adjuntos(
+    despacho_id: str, viaje_id: str, sesion: Sesion
+) -> list[ViajeAdjuntoResponse]:
+    """Lista los adjuntos de un viaje (ticket gasoil, CPE escaneada, etc.)."""
+    return await DespachosService(sesion).listar_adjuntos(despacho_id, viaje_id)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/adjuntos",
+    response_model=ViajeAdjuntoResponse,
+    status_code=201,
+    operation_id="subir_adjunto_viaje",
+)
+async def subir_adjunto(
+    despacho_id: str,
+    viaje_id: str,
+    datos: SubirAdjuntoViajeRequest,
+    sesion: Sesion,
+) -> ViajeAdjuntoResponse:
+    """Sube un adjunto al viaje (data URL)."""
+    return await DespachosService(sesion).subir_adjunto(despacho_id, viaje_id, datos)
+
+
+@router.get(
+    "/{despacho_id}/viajes/{viaje_id}/adjuntos/{adjunto_id}",
+    response_model=ViajeAdjuntoDetalleResponse,
+    operation_id="obtener_adjunto_viaje",
+)
+async def obtener_adjunto(
+    despacho_id: str, viaje_id: str, adjunto_id: str, sesion: Sesion
+) -> ViajeAdjuntoDetalleResponse:
+    """Devuelve un adjunto con su contenido (data URL)."""
+    return await DespachosService(sesion).obtener_adjunto(despacho_id, viaje_id, adjunto_id)
+
+
+@router.delete(
+    "/{despacho_id}/viajes/{viaje_id}/adjuntos/{adjunto_id}",
+    status_code=204,
+    operation_id="eliminar_adjunto_viaje",
+)
+async def eliminar_adjunto(
+    despacho_id: str, viaje_id: str, adjunto_id: str, sesion: Sesion
+) -> None:
+    """Elimina un adjunto del viaje."""
+    await DespachosService(sesion).eliminar_adjunto(despacho_id, viaje_id, adjunto_id)
+
+
+@router.post(
+    "/{despacho_id}/viajes/{viaje_id}/generar-ticket-gasoil",
+    response_model=ViajeAdjuntoResponse,
+    status_code=201,
+    operation_id="generar_ticket_gasoil",
+)
+async def generar_ticket_gasoil(
+    despacho_id: str, viaje_id: str, sesion: Sesion
+) -> ViajeAdjuntoResponse:
+    """Genera un ticket de gasoil interno y lo adjunta al viaje."""
+    return await DespachosService(sesion).generar_ticket_gasoil(despacho_id, viaje_id)
 
 
 @router.delete(

@@ -22,16 +22,26 @@ from app.modulos.despachos.models import Despacho, Viaje
 
 # Grafo de transiciones válidas de estado de un viaje.
 _TRANSICIONES_VIAJE: dict[str, set[str]] = {
-    "borrador": {"pendiente", "en_viaje", "en_busqueda_transportistas"},
-    "en_busqueda_transportistas": {"borrador", "pendiente"},
-    "pendiente": {"en_viaje"},
-    "en_viaje": {"retrasado", "completado"},
-    "retrasado": {"en_viaje", "completado"},
+    "borrador": {"pendiente", "en_viaje", "en_busqueda_transportistas", "cancelado"},
+    "en_busqueda_transportistas": {"borrador", "pendiente", "cancelado"},
+    "pendiente": {"en_viaje", "en_busqueda_transportistas", "cancelado"},
+    "en_viaje": {"retrasado", "completado", "cancelado"},
+    "retrasado": {"en_viaje", "completado", "cancelado"},
     "completado": set(),
+    "cancelado": set(),
 }
 
 # Estados en los que un viaje todavía no salió a la ruta.
 _ESTADOS_SIN_INICIAR = {"borrador", "pendiente", "en_busqueda_transportistas"}
+_ESTADOS_ASIGNABLES_LISTA = {"borrador", "pendiente", "en_busqueda_transportistas"}
+_ESTADOS_TERMINALES = {"completado", "cancelado"}
+_ESTADOS_REASIGNABLES = {
+    "borrador",
+    "pendiente",
+    "en_busqueda_transportistas",
+    "en_viaje",
+    "retrasado",
+}
 
 
 class DespachoBO:
@@ -43,6 +53,50 @@ class DespachoBO:
             raise ReglaDeNegocioViolada(
                 "La fecha de llegada estimada no puede ser anterior a la de inicio"
             )
+
+    def validar_asignacion_por_lista(self, viaje: Viaje) -> None:
+        """El viaje debe poder recibir asignación automática."""
+        if viaje.estado not in _ESTADOS_ASIGNABLES_LISTA:
+            raise ReglaDeNegocioViolada(
+                f"No se puede asignar por lista un viaje en estado {viaje.estado}"
+            )
+        if viaje.chofer_id and viaje.estado == "pendiente":
+            raise ReglaDeNegocioViolada("El viaje ya tiene chofer asignado")
+
+    @staticmethod
+    def unidad_compatible(
+        *,
+        capacidad_tn: float | None,
+        tipo_unidad: str,
+        toneladas: float,
+        tipo_requerido: str | None = None,
+    ) -> bool:
+        if capacidad_tn is not None and capacidad_tn < toneladas:
+            return False
+        if tipo_requerido and tipo_unidad.lower() != tipo_requerido.lower():
+            return False
+        return True
+
+    def elegir_flota_propia(
+        self,
+        unidades: list,
+        choferes_ocupados: set[str],
+        toneladas: float,
+        tipo_unidad: str | None = None,
+    ):
+        """Primera unidad propia libre y compatible (orden de lista recibida)."""
+        for u in unidades:
+            if u.chofer_id in choferes_ocupados:
+                continue
+            if not self.unidad_compatible(
+                capacidad_tn=u.capacidad_tn,
+                tipo_unidad=u.tipo_unidad,
+                toneladas=toneladas,
+                tipo_requerido=tipo_unidad,
+            ):
+                continue
+            return u
+        return None
 
     def validar_activacion(self, despacho: Despacho) -> None:
         """Solo se activa una campaña en borrador y con viajes cargados."""
@@ -69,15 +123,34 @@ class DespachoBO:
             raise ReglaDeNegocioViolada("La campaña está cerrada")
 
     def validar_cierre(self, despacho: Despacho) -> None:
-        """Solo se cierra una campaña activa con todos los viajes completados."""
+        """Solo se cierra una campaña activa con todos los viajes terminados."""
         if despacho.estado != "activo":
             raise ReglaDeNegocioViolada("Solo se pueden cerrar campañas activas")
         if not despacho.viajes:
             raise ReglaDeNegocioViolada("No se puede cerrar una campaña sin viajes")
-        incompletos = [viaje for viaje in despacho.viajes if viaje.estado != "completado"]
+        incompletos = [
+            viaje for viaje in despacho.viajes if viaje.estado not in _ESTADOS_TERMINALES
+        ]
         if incompletos:
             raise ReglaDeNegocioViolada(
-                f"Quedan {len(incompletos)} viaje(s) sin completar"
+                f"Quedan {len(incompletos)} viaje(s) sin completar ni cancelar"
+            )
+
+    def validar_cancelacion_viaje(self, viaje: Viaje) -> None:
+        if viaje.estado in _ESTADOS_TERMINALES:
+            raise ReglaDeNegocioViolada(
+                f"No se puede cancelar un viaje en estado {viaje.estado}"
+            )
+        self.validar_transicion_viaje(viaje, "cancelado")
+
+    def cancelar_viaje(self, viaje: Viaje) -> None:
+        self.validar_cancelacion_viaje(viaje)
+        viaje.estado = "cancelado"
+
+    def validar_reasignacion_chofer(self, viaje: Viaje) -> None:
+        if viaje.estado not in _ESTADOS_REASIGNABLES:
+            raise ReglaDeNegocioViolada(
+                f"No se puede reasignar chofer en estado {viaje.estado}"
             )
 
     def cerrar(self, despacho: Despacho) -> None:
@@ -110,11 +183,30 @@ class DespachoBO:
         if nuevo_estado == "completado":
             viaje.progreso = 100
 
-    def validar_inicio_viaje(self, viaje: Viaje) -> None:
-        """Para salir a la ruta el viaje necesita chofer asignado."""
+    def validar_inicio_viaje(
+        self,
+        viaje: Viaje,
+        *,
+        checklist_gasoil: bool = False,
+        checklist_efectivo: bool = False,
+    ) -> None:
+        """Para salir a la ruta el viaje necesita chofer, dominio y checklist."""
         if viaje.chofer_id is None:
             raise ReglaDeNegocioViolada(
                 "No se puede iniciar un viaje sin chofer asignado"
+            )
+        dominio = (viaje.dominio or "").strip()
+        if dominio in ("", "-"):
+            raise ReglaDeNegocioViolada(
+                "No se puede iniciar un viaje sin dominio (patente) asignado"
+            )
+        if not checklist_gasoil:
+            raise ReglaDeNegocioViolada(
+                "Confirmá el ticket / control de gasoil para iniciar el viaje"
+            )
+        if not checklist_efectivo:
+            raise ReglaDeNegocioViolada(
+                "Confirmá la entrega de efectivo para iniciar el viaje"
             )
 
     def validar_eliminacion_viaje(self, viaje: Viaje) -> None:
@@ -128,6 +220,18 @@ class DespachoBO:
         """Solo se editan campañas en borrador (las activas están en operación)."""
         if despacho.estado == "activo":
             raise ReglaDeNegocioViolada("No se puede editar una campaña activa")
+
+
+    def validar_edicion_para_intencion_cpe(self, despacho: Despacho) -> None:
+        """Permite corregir datos CPE de una campaña operable (sin reemplazar viajes)."""
+        if despacho.estado == "cerrado":
+            raise ReglaDeNegocioViolada(
+                "No se puede editar una campaña cerrada para regenerar la CPE"
+            )
+        if despacho.estado not in {"borrador", "activo"}:
+            raise ReglaDeNegocioViolada(
+                f"No se puede editar una campaña en estado {despacho.estado}"
+            )
 
     def activar(self, despacho: Despacho) -> None:
         """Activa la campaña y promueve viajes borrador/búsqueda a pendiente."""

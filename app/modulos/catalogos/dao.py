@@ -21,7 +21,9 @@ class CatalogosDAO:
 
     async def listar_productores(self) -> list[Productor]:
         resultado = await self._sesion.execute(
-            select(Productor).order_by(Productor.nombre)
+            select(Productor)
+            .order_by(Productor.nombre)
+            .options(selectinload(Productor.campos).selectinload(Campo.puntos_entrada))
         )
         return list(resultado.scalars())
 

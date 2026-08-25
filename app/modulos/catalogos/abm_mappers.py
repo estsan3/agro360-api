@@ -76,11 +76,13 @@ def transportista_a_abm(t: Transportista) -> TransportistaAbm:
         email=str(ui.get("email", "")),
         telefono=str(ui.get("telefono", "")),
         pagina_web=str(ui.get("pagina_web", "")),
+        es_flota_propia=bool(t.es_flota_propia),
     )
 
 
 def camion_a_abm(c: Camion) -> CamionTransportistaAbm:
     ui = _ui(c)
+    tipo = c.tipo_unidad or str(ui.get("tipo", "")) or "tolva"
     return CamionTransportistaAbm(
         id=c.id,
         transportista_id=c.transportista_id,
@@ -89,7 +91,8 @@ def camion_a_abm(c: Camion) -> CamionTransportistaAbm:
         dominio=c.dominio,
         marca=str(ui.get("marca", "")),
         modelo=c.modelo or str(ui.get("modelo", "")),
-        tipo=str(ui.get("tipo", "")),
+        tipo=tipo,
+        capacidad_tn=c.capacidad_tn,
         nro_chasis=str(ui.get("nro_chasis", "")),
         nro_motor=str(ui.get("nro_motor", "")),
         foto_tarjeta_verde=_archivo(ui, "foto_tarjeta_verde"),
@@ -136,6 +139,8 @@ def aplicar_transportista_ui(t: Transportista, datos: dict[str, Any]) -> None:
     razon = str(datos.get("razon_social", "")).strip()
     t.nombre = _nombre_canonico(fantasia, razon)
     t.cuit = datos.get("cuit") or None
+    if "es_flota_propia" in datos:
+        t.es_flota_propia = bool(datos.get("es_flota_propia"))
     t.datos_ui = {
         "nombre_fantasia": fantasia or t.nombre,
         "razon_social": razon or t.nombre,
@@ -148,9 +153,14 @@ def aplicar_transportista_ui(t: Transportista, datos: dict[str, Any]) -> None:
 
 def aplicar_camion_ui(c: Camion, datos: dict[str, Any]) -> None:
     c.modelo = str(datos.get("modelo", c.modelo or ""))
+    tipo = str(datos.get("tipo", "") or c.tipo_unidad or "tolva").strip() or "tolva"
+    c.tipo_unidad = tipo
+    if "capacidad_tn" in datos:
+        cap = datos.get("capacidad_tn")
+        c.capacidad_tn = float(cap) if cap is not None else None
     c.datos_ui = {
         "marca": datos.get("marca", ""),
-        "tipo": datos.get("tipo", ""),
+        "tipo": tipo,
         "nro_chasis": datos.get("nro_chasis", ""),
         "nro_motor": datos.get("nro_motor", ""),
         "foto_tarjeta_verde": _archivo_a_dict(datos.get("foto_tarjeta_verde")),
@@ -230,6 +240,7 @@ def campo_a_abm(c: Campo) -> CampoProductorAbm:
         longitud=float(ui.get("longitud", 0) or 0),
         contacto_nombre=str(ui.get("contacto_nombre", "")),
         contacto_telefono=str(ui.get("contacto_telefono", "")),
+        nro_renspa=c.nro_renspa or "",
         puntos_entrada=[
             punto_entrada_a_abm(p) for p in sorted(c.puntos_entrada, key=lambda x: x.orden)
             if p.activo
@@ -289,6 +300,8 @@ def aplicar_campo_ui(c: Campo, datos: dict[str, Any]) -> None:
         "contacto_nombre": datos.get("contacto_nombre", ""),
         "contacto_telefono": datos.get("contacto_telefono", ""),
     }
+    renspa = str(datos.get("nro_renspa", "") or "").strip()
+    c.nro_renspa = renspa or None
 
 
 def texto_busqueda_transportista(t: Transportista) -> str:

@@ -17,6 +17,7 @@ class PuntoEntradaResponse(BaseModel):
 class CampoResponse(BaseModel):
     id: str
     nombre: str
+    nro_renspa: str | None = None
     puntos_entrada: list[PuntoEntradaResponse] = []
 
     model_config = {"from_attributes": True}
@@ -129,6 +130,9 @@ class CamionAgregadoResponse(BaseModel):
     id: str
     dominio: str
     modelo: str = ""
+    tipo: str = "tolva"
+    # Dominio del acoplado/semi (datos_ui o unidad hermana); vacío si no hay.
+    acoplado_dominio: str = ""
 
 
 class TransportistaAgregadoResponse(BaseModel):
@@ -144,6 +148,7 @@ class ChoferAgregadoResponse(BaseModel):
     id: str
     nombre: str
     transportista_id: str | None = None
+    camion_id: str | None = None
     # Hint legacy para UIs que aún autocompletan patente (primera de la flota).
     dominio: str = ""
     modelo: str = ""

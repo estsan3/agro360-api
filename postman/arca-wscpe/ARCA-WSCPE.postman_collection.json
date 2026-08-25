@@ -1,0 +1,2383 @@
+{
+  "info": {
+    "_postman_id": "6ab602c2-9bd3-417a-8df3-693529439e51",
+    "name": "ARCA WSCPE + WSAA (Homologación)",
+    "description": "Colección generada desde el WSDL de homologación WSCPE + LoginCms WSAA.\n\nManual: https://www.arca.gob.ar/ws/documentos/manual_wscpe_v2-0-5.pdf\nWSDL homo: https://cpea-ws-qaext.afip.gob.ar/wscpe/services/soap?wsdl\nWSAA homo: https://wsaahomo.afip.gov.ar/ws/services/LoginCms\n\nFlujo: 1) generar CMS (service=wscpe) 2) LoginCms 3) dummy 4) operaciones con Auth.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "wscpeNs",
+      "value": "https://serviciosjava.afip.gob.ar/wscpe/"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 - Smoke Homologación",
+      "description": "Correr en orden: Dummy → LoginCms → probe Auth.",
+      "item": [
+        {
+          "name": "dummy (sin Auth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/dummy\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:dummy/>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "Verifica appserver / authserver / dbserver. No requiere WSAA."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const xml = pm.response.text();",
+                  "pm.test('appserver Ok', function () { pm.expect(xml).to.match(/<appserver>\\s*Ok\\s*<\\/appserver>/i); });",
+                  "pm.test('authserver Ok', function () { pm.expect(xml).to.match(/<authserver>\\s*Ok\\s*<\\/authserver>/i); });",
+                  "pm.test('dbserver Ok', function () { pm.expect(xml).to.match(/<dbserver>\\s*Ok\\s*<\\/dbserver>/i); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "LoginCms (WSAA homologación)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsaa=\"http://wsaa.view.sua.dvadac.desein.afip.gov\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsaa:loginCms>\n      <wsaa:in0>{{cmsBase64}}</wsaa:in0>\n    </wsaa:loginCms>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wsaaBaseUrl}}",
+            "description": "Obtiene Token+Sign. Generá {{cmsBase64}} con scripts/generar_cms_wsaa.py (service=wscpe)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200 o Fault CMS explícito', function () {",
+                  "  pm.expect([200,500]).to.include(pm.response.code);",
+                  "});",
+                  "let xml = pm.response.text();",
+                  "// loginCmsReturn viene HTML-escaped (&lt;token&gt;)",
+                  "xml = xml.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '\"').replace(/&amp;/g, '&');",
+                  "const token = (xml.match(/<token>([\\s\\S]*?)<\\/token>/) || [])[1];",
+                  "const sign = (xml.match(/<sign>([\\s\\S]*?)<\\/sign>/) || [])[1];",
+                  "if (token && sign) {",
+                  "  pm.environment.set('token', token.trim());",
+                  "  pm.environment.set('sign', sign.trim());",
+                  "  pm.test('Token y Sign guardados en environment', function () {",
+                  "    pm.expect(token.length).to.be.above(10);",
+                  "    pm.expect(sign.length).to.be.above(10);",
+                  "  });",
+                  "  console.log('TA OK. token/sign actualizados.');",
+                  "} else {",
+                  "  pm.test('Respuesta WSAA reconocible', function () {",
+                  "    pm.expect(xml).to.match(/loginCmsResponse|faultstring|CMS/i);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "ConsultarProvinciasReq (probe Auth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarProvincias\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarProvinciasReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n    </wsc:ConsultarProvinciasReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "Con token/sign inválidos debe fallar autenticación (valida Auth schema). Con TA real lista provincias."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const xml = pm.response.text();",
+                  "const ok = /ConsultarProvinciasResp/i.test(xml) && /<provincia>/i.test(xml);",
+                  "const authFail = /autenticacion|autenticación|token|sign/i.test(xml);",
+                  "pm.test('Respuesta de negocio o error de autenticación', function () {",
+                  "  pm.expect(ok || authFail).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 - WSAA Autenticación",
+      "item": [
+        {
+          "name": "LoginCms (WSAA homologación)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsaa=\"http://wsaa.view.sua.dvadac.desein.afip.gov\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsaa:loginCms>\n      <wsaa:in0>{{cmsBase64}}</wsaa:in0>\n    </wsaa:loginCms>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wsaaBaseUrl}}",
+            "description": "Obtiene Token+Sign. Generá {{cmsBase64}} con scripts/generar_cms_wsaa.py (service=wscpe)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200 o Fault CMS explícito', function () {",
+                  "  pm.expect([200,500]).to.include(pm.response.code);",
+                  "});",
+                  "let xml = pm.response.text();",
+                  "// loginCmsReturn viene HTML-escaped (&lt;token&gt;)",
+                  "xml = xml.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '\"').replace(/&amp;/g, '&');",
+                  "const token = (xml.match(/<token>([\\s\\S]*?)<\\/token>/) || [])[1];",
+                  "const sign = (xml.match(/<sign>([\\s\\S]*?)<\\/sign>/) || [])[1];",
+                  "if (token && sign) {",
+                  "  pm.environment.set('token', token.trim());",
+                  "  pm.environment.set('sign', sign.trim());",
+                  "  pm.test('Token y Sign guardados en environment', function () {",
+                  "    pm.expect(token.length).to.be.above(10);",
+                  "    pm.expect(sign.length).to.be.above(10);",
+                  "  });",
+                  "  console.log('TA OK. token/sign actualizados.');",
+                  "} else {",
+                  "  pm.test('Respuesta WSAA reconocible', function () {",
+                  "    pm.expect(xml).to.match(/loginCmsResponse|faultstring|CMS/i);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - WSCPE Disponibilidad",
+      "item": [
+        {
+          "name": "dummy (sin Auth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/dummy\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:dummy/>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "Verifica appserver / authserver / dbserver. No requiere WSAA."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const xml = pm.response.text();",
+                  "pm.test('appserver Ok', function () { pm.expect(xml).to.match(/<appserver>\\s*Ok\\s*<\\/appserver>/i); });",
+                  "pm.test('authserver Ok', function () { pm.expect(xml).to.match(/<authserver>\\s*Ok\\s*<\\/authserver>/i); });",
+                  "pm.test('dbserver Ok', function () { pm.expect(xml).to.match(/<dbserver>\\s*Ok\\s*<\\/dbserver>/i); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - Consultas (solo Auth)",
+      "item": [
+        {
+          "name": "consultarProvincias",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarProvincias\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarProvinciasReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n    </wsc:ConsultarProvinciasReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarProvincias` → elemento `ConsultarProvinciasReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCategoriasSemillas",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCategoriasSemillas\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCategoriasSemillasReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n    </wsc:ConsultarCategoriasSemillasReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCategoriasSemillas` → elemento `ConsultarCategoriasSemillasReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarTiposEmbalaje",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarTiposEmbalaje\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarTiposEmbalajeReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n    </wsc:ConsultarTiposEmbalajeReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarTiposEmbalaje` → elemento `ConsultarTiposEmbalajeReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarUnidadesMedida",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarUnidadesMedida\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarUnidadesMedidaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n    </wsc:ConsultarUnidadesMedidaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarUnidadesMedida` → elemento `ConsultarUnidadesMedidaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarDerivadosGranarios",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarDerivadosGranarios\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarDerivadosGranariosReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n    </wsc:ConsultarDerivadosGranariosReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarDerivadosGranarios` → elemento `ConsultarDerivadosGranariosReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarTiposGrano",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarTiposGrano\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarTiposGranoReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n    </wsc:ConsultarTiposGranoReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarTiposGrano` → elemento `ConsultarTiposGranoReq`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 - Consultas (con parámetros)",
+      "item": [
+        {
+          "name": "consultarLocalidadesPorProvincia",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarLocalidadesPorProvincia\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarLocalidadesPorProvinciaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <solicitud>\n        <codProvincia>{{codProvincia}}</codProvincia>\n      </solicitud>\n    </wsc:ConsultarLocalidadesPorProvinciaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarLocalidadesPorProvincia` → elemento `ConsultarLocalidadesPorProvinciaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarDomiciliosPorCUIT",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarDomiciliosPorCUIT\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarDomiciliosPorCUITReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <cuit>{{cuitConsulta}}</cuit>\n    </wsc:ConsultarDomiciliosPorCUITReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarDomiciliosPorCUIT` → elemento `ConsultarDomiciliosPorCUITReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarLocalidadesProductor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarLocalidadesProductor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarLocalidadesProductorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <solicitud>\n        <cuit>{{cuitConsulta}}</cuit>\n      </solicitud>\n    </wsc:ConsultarLocalidadesProductorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarLocalidadesProductor` → elemento `ConsultarLocalidadesProductorReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarUltNroOrden",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarUltNroOrden\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarUltNroOrdenReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarUltNroOrdenReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarUltNroOrden` → elemento `ConsultarUltNroOrdenReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEPorDestino",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEPorDestino\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEPorDestinoReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEPorDestinoReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEPorDestino` → elemento `ConsultarCPEPorDestinoReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEPPendientesDeResolucion",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEPPendientesDeResolucion\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEPPendientesDeResolucionReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEPPendientesDeResolucionReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEPPendientesDeResolucion` → elemento `ConsultarCPEPPendientesDeResolucionReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarPlantas",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarPlantas\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarPlantasReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarPlantasReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarPlantas` → elemento `ConsultarPlantasReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarRenspa",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarRenspa\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarRenspaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <cuit>{{cuitConsulta}}</cuit>\n      <codProvincia>{{codProvincia}}</codProvincia>\n    </wsc:ConsultarRenspaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarRenspa` → elemento `ConsultarRenspaReq`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "05 - Automotor (74 / 274)",
+      "item": [
+        {
+          "name": "autorizarCPEAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/autorizarCPEAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AutorizarCPEAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <solicitud>\n        <cabecera>\n          <tipoCP>74</tipoCP>\n          <cuitSolicitante>{{cuitRepresentada}}</cuitSolicitante>\n          <sucursal>{{sucursal}}</sucursal>\n          <nroOrden>{{nroOrden}}</nroOrden>\n        </cabecera>\n        <origen>\n          <productor>\n            <codProvincia>21</codProvincia>\n            <codLocalidad>6975</codLocalidad>\n          </productor>\n        </origen>\n        <correspondeRetiroProductor>true</correspondeRetiroProductor>\n        <esSolicitanteCampo>false</esSolicitanteCampo>\n        <retiroProductor>\n          <cuitRemitenteComercialProductor>{{cuitConsulta}}</cuitRemitenteComercialProductor>\n        </retiroProductor>\n        <intervinientes>\n          <cuitRemitenteComercialVentaPrimaria>33502232229</cuitRemitenteComercialVentaPrimaria>\n          <cuitRemitenteComercialVentaSecundaria>30711855641</cuitRemitenteComercialVentaSecundaria>\n          <cuitMercadoATermino>30525698412</cuitMercadoATermino>\n          <cuitCorredorVentaSecundaria>30703605105</cuitCorredorVentaSecundaria>\n          <cuitRepresentanteEntregador>30711962766</cuitRepresentanteEntregador>\n        </intervinientes>\n        <datosCarga>\n          <codGrano>{{codGrano}}</codGrano>\n          <cosecha>2425</cosecha>\n          <pesoBruto>45000</pesoBruto>\n          <pesoTara>15000</pesoTara>\n        </datosCarga>\n        <destino>\n          <cuit>33506737449</cuit>\n          <esDestinoCampo>false</esDestinoCampo>\n          <codProvincia>{{codProvinciaDestino}}</codProvincia>\n          <codLocalidad>{{codLocalidadDestino}}</codLocalidad>\n          <planta>512428</planta>\n        </destino>\n        <destinatario>\n          <cuit>33506737449</cuit>\n        </destinatario>\n        <transporte>\n          <cuitTransportista>20237684436</cuitTransportista>\n          <dominio>JII026</dominio>\n          <dominio>AF495WZ</dominio>\n          <fechaHoraPartida>2025-08-13T20:00:00</fechaHoraPartida>\n          <kmRecorrer>454</kmRecorrer>\n          <codigoTurno>COSM6752-14082025</codigoTurno>\n          <cuitChofer>20388082802</cuitChofer>\n          <tarifa>41000</tarifa>\n          <cuitPagadorFlete>{{cuitRepresentada}}</cuitPagadorFlete>\n          <mercaderiaFumigada>false</mercaderiaFumigada>\n        </transporte>\n      </solicitud>\n    </wsc:AutorizarCPEAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "Ejemplo desde CPE Automotor PDF (Maíz Alvear→PGSM). Completar CUITs redacted y códigos Santa Fe."
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEAutomotor` → elemento `ConsultarCPEAutomotorReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "nuevoDestinoDestinatarioCPEAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/nuevoDestinoDestinatarioCPEAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:NuevoDestinoDestinatarioCPEAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:NuevoDestinoDestinatarioCPEAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `nuevoDestinoDestinatarioCPEAutomotor` → elemento `NuevoDestinoDestinatarioCPEAutomotorReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "regresoOrigenCPEAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/regresoOrigenCPEAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:RegresoOrigenCPEAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:RegresoOrigenCPEAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `regresoOrigenCPEAutomotor` → elemento `RegresoOrigenCPEAutomotorReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "desvioCPEAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/desvioCPEAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:DesvioCPEAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:DesvioCPEAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `desvioCPEAutomotor` → elemento `DesvioCPEAutomotorReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "confirmacionDefinitivaCPEAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/confirmacionDefinitivaCPEAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConfirmacionDefinitivaCPEAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConfirmacionDefinitivaCPEAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `confirmacionDefinitivaCPEAutomotor` → elemento `ConfirmacionDefinitivaCPEAutomotorReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEAutomotor` → elemento `EditarCPEAutomotorReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEConfirmadaAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEConfirmadaAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEConfirmadaAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEConfirmadaAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEConfirmadaAutomotor` → elemento `EditarCPEConfirmadaAutomotorReq`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "06 - Ferroviaria",
+      "item": [
+        {
+          "name": "autorizarCPEFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/autorizarCPEFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AutorizarCPEFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AutorizarCPEFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `autorizarCPEFerroviaria` → elemento `AutorizarCPEFerroviariaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEFerroviaria` → elemento `ConsultarCPEFerroviariaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "nuevoDestinoDestinatarioCPEFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/nuevoDestinoDestinatarioCPEFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:NuevoDestinoDestinatarioCPEFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:NuevoDestinoDestinatarioCPEFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `nuevoDestinoDestinatarioCPEFerroviaria` → elemento `NuevoDestinoDestinatarioCPEFerroviariaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "regresoOrigenCPEFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/regresoOrigenCPEFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:RegresoOrigenCPEFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:RegresoOrigenCPEFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `regresoOrigenCPEFerroviaria` → elemento `RegresoOrigenCPEFerroviariaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "desvioCPEFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/desvioCPEFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:DesvioCPEFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:DesvioCPEFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `desvioCPEFerroviaria` → elemento `DesvioCPEFerroviariaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "confirmacionDefinitivaCPEFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/confirmacionDefinitivaCPEFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConfirmacionDefinitivaCPEFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConfirmacionDefinitivaCPEFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `confirmacionDefinitivaCPEFerroviaria` → elemento `ConfirmacionDefinitivaCPEFerroviariaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultaCPEFerroviariaPorNroOperativo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultaCPEFerroviariaPorNroOperativo\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultaCPEFerroviariaPorNroOperativoReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultaCPEFerroviariaPorNroOperativoReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultaCPEFerroviariaPorNroOperativo` → elemento `ConsultaCPEFerroviariaPorNroOperativoReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEFerroviaria` → elemento `EditarCPEFerroviariaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEConfirmadaFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEConfirmadaFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEConfirmadaFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEConfirmadaFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEConfirmadaFerroviaria` → elemento `EditarCPEConfirmadaFerroviariaReq`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "07 - Derivados / DG / Ductos / Semillas",
+      "item": [
+        {
+          "name": "consultarVariedadesSemillas",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarVariedadesSemillas\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarVariedadesSemillasReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <codGrano>{{codGrano}}</codGrano>\n    </wsc:ConsultarVariedadesSemillasReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarVariedadesSemillas` → elemento `ConsultarVariedadesSemillasReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEDGPendienteActivacion",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEDGPendienteActivacion\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEDGPendienteActivacionReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEDGPendienteActivacionReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEDGPendienteActivacion` → elemento `ConsultarCPEDGPendienteActivacionReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEEmitidasDestinoDGPendientesActivacion",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEEmitidasDestinoDGPendientesActivacion\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEEmitidasDestinoDGPendientesActivacionReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEEmitidasDestinoDGPendientesActivacionReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEEmitidasDestinoDGPendientesActivacion` → elemento `ConsultarCPEEmitidasDestinoDGPendientesActivacionReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "informarContingenciaEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/informarContingenciaEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:InformarContingenciaEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:InformarContingenciaEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `informarContingenciaEmisionDestinoDG` → elemento `InformarContingenciaEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "anularCPEEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/anularCPEEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AnularCPEEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AnularCPEEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `anularCPEEmisionDestinoDG` → elemento `AnularCPEEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "descargadoDestinoCPEEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/descargadoDestinoCPEEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:DescargadoDestinoCPEEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:DescargadoDestinoCPEEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `descargadoDestinoCPEEmisionDestinoDG` → elemento `DescargadoDestinoCPEEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "aceptarEmisionDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/aceptarEmisionDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AceptarEmisionDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AceptarEmisionDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `aceptarEmisionDG` → elemento `AceptarEmisionDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "rechazarEmisionDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/rechazarEmisionDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:RechazarEmisionDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:RechazarEmisionDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `rechazarEmisionDG` → elemento `RechazarEmisionDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "aceptarEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/aceptarEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AceptarEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AceptarEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `aceptarEmisionDestinoDG` → elemento `AceptarEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "rechazarEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/rechazarEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:RechazarEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:RechazarEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `rechazarEmisionDestinoDG` → elemento `RechazarEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "cerrarContingenciaCPEEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/cerrarContingenciaCPEEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:CerrarContingenciaCPEEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:CerrarContingenciaCPEEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `cerrarContingenciaCPEEmisionDestinoDG` → elemento `CerrarContingenciaCPEEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarPlantasDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarPlantasDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarPlantasDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarPlantasDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarPlantasDG` → elemento `ConsultarPlantasDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "autorizarCPEFerroviariaDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/autorizarCPEFerroviariaDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AutorizarCPEFerroviariaDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AutorizarCPEFerroviariaDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `autorizarCPEFerroviariaDG` → elemento `AutorizarCPEFerroviariaDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEFerroviariaDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEFerroviariaDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEFerroviariaDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEFerroviariaDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEFerroviariaDG` → elemento `ConsultarCPEFerroviariaDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEAutomotorDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEAutomotorDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEAutomotorDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEAutomotorDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEAutomotorDG` → elemento `ConsultarCPEAutomotorDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEEmisionDestinoDG` → elemento `ConsultarCPEEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "consultarCPEDuctos",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/consultarCPEDuctos\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConsultarCPEDuctosReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConsultarCPEDuctosReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `consultarCPEDuctos` → elemento `ConsultarCPEDuctosReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "nuevoDestinoDestinatarioCPEFerroviariaDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/nuevoDestinoDestinatarioCPEFerroviariaDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:NuevoDestinoDestinatarioCPEFerroviariaDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:NuevoDestinoDestinatarioCPEFerroviariaDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `nuevoDestinoDestinatarioCPEFerroviariaDG` → elemento `NuevoDestinoDestinatarioCPEFerroviariaDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "nuevoDestinoDestinatarioCPEAutomotorDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/nuevoDestinoDestinatarioCPEAutomotorDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:NuevoDestinoDestinatarioCPEAutomotorDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:NuevoDestinoDestinatarioCPEAutomotorDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `nuevoDestinoDestinatarioCPEAutomotorDG` → elemento `NuevoDestinoDestinatarioCPEAutomotorDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "nuevoDestinoDestinatarioCPEEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/nuevoDestinoDestinatarioCPEEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:NuevoDestinoDestinatarioCPEEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:NuevoDestinoDestinatarioCPEEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `nuevoDestinoDestinatarioCPEEmisionDestinoDG` → elemento `NuevoDestinoDestinatarioCPEEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "desvioCPEFerroviariaDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/desvioCPEFerroviariaDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:DesvioCPEFerroviariaDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:DesvioCPEFerroviariaDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `desvioCPEFerroviariaDG` → elemento `DesvioCPEFerroviariaDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "desvioCPEAutomotorDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/desvioCPEAutomotorDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:DesvioCPEAutomotorDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:DesvioCPEAutomotorDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `desvioCPEAutomotorDG` → elemento `DesvioCPEAutomotorDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "confirmacionDefinitivaCPEFerroviariaDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/confirmacionDefinitivaCPEFerroviariaDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConfirmacionDefinitivaCPEFerroviariaDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConfirmacionDefinitivaCPEFerroviariaDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `confirmacionDefinitivaCPEFerroviariaDG` → elemento `ConfirmacionDefinitivaCPEFerroviariaDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "confirmacionDefinitivaCPEAutomotorDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/confirmacionDefinitivaCPEAutomotorDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConfirmacionDefinitivaCPEAutomotorDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConfirmacionDefinitivaCPEAutomotorDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `confirmacionDefinitivaCPEAutomotorDG` → elemento `ConfirmacionDefinitivaCPEAutomotorDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "confirmacionDefinitivaCPEDuctosDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/confirmacionDefinitivaCPEDuctosDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConfirmacionDefinitivaCPEDuctosDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConfirmacionDefinitivaCPEDuctosDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `confirmacionDefinitivaCPEDuctosDG` → elemento `ConfirmacionDefinitivaCPEDuctosDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEDGFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEDGFerroviaria\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEDGFerroviariaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEDGFerroviariaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEDGFerroviaria` → elemento `EditarCPEDGFerroviariaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEDGAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEDGAutomotor\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEDGAutomotorReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEDGAutomotorReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEDGAutomotor` → elemento `EditarCPEDGAutomotorReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEDGDuctos",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEDGDuctos\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEDGDuctosReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEDGDuctosReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEDGDuctos` → elemento `EditarCPEDGDuctosReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "autorizarCPEAutomotorDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/autorizarCPEAutomotorDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AutorizarCPEAutomotorDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AutorizarCPEAutomotorDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `autorizarCPEAutomotorDG` → elemento `AutorizarCPEAutomotorDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "autorizarCPEDuctosDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/autorizarCPEDuctosDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AutorizarCPEDuctosDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AutorizarCPEDuctosDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `autorizarCPEDuctosDG` → elemento `AutorizarCPEDuctosDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "autorizarCPEEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/autorizarCPEEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AutorizarCPEEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AutorizarCPEEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `autorizarCPEEmisionDestinoDG` → elemento `AutorizarCPEEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "regresoOrigenCPEAutomotorDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/regresoOrigenCPEAutomotorDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:RegresoOrigenCPEAutomotorDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:RegresoOrigenCPEAutomotorDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `regresoOrigenCPEAutomotorDG` → elemento `RegresoOrigenCPEAutomotorDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "regresoOrigenCPEFerroviariaDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/regresoOrigenCPEFerroviariaDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:RegresoOrigenCPEFerroviariaDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:RegresoOrigenCPEFerroviariaDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `regresoOrigenCPEFerroviariaDG` → elemento `RegresoOrigenCPEFerroviariaDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "regresoOrigenCPEEmisionDestinoDG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/regresoOrigenCPEEmisionDestinoDG\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:RegresoOrigenCPEEmisionDestinoDGReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:RegresoOrigenCPEEmisionDestinoDGReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `regresoOrigenCPEEmisionDestinoDG` → elemento `RegresoOrigenCPEEmisionDestinoDGReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEDGConfirmadaAutomotor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEConfirmadaAutomotorDg\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEConfirmadaAutomotorDgReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEConfirmadaAutomotorDgReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEDGConfirmadaAutomotor` → elemento `EditarCPEConfirmadaAutomotorDgReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEDGConfirmadaFerroviaria",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEConfirmadaFerroviariaDg\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEConfirmadaFerroviariaDgReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEConfirmadaFerroviariaDgReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEDGConfirmadaFerroviaria` → elemento `EditarCPEConfirmadaFerroviariaDgReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "editarCPEConfirmadaDuctos",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/editarCPEConfirmadaDuctos\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:EditarCPEConfirmadaDuctosReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:EditarCPEConfirmadaDuctosReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `editarCPEConfirmadaDuctos` → elemento `EditarCPEConfirmadaDuctosReq`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "08 - Otras operaciones",
+      "item": [
+        {
+          "name": "informarContingencia",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/informarContingencia\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:InformarContingenciaReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:InformarContingenciaReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `informarContingencia` → elemento `InformarContingenciaReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "anularCPE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/anularCPE\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:AnularCPEReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:AnularCPEReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `anularCPE` → elemento `AnularCPEReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "confirmarArriboCPE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/confirmarArriboCPE\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:ConfirmarArriboCPEReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:ConfirmarArriboCPEReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `confirmarArriboCPE` → elemento `ConfirmarArriboCPEReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "rechazoCPE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/rechazoCPE\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:RechazoCPEReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:RechazoCPEReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `rechazoCPE` → elemento `RechazoCPEReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "descargadoDestinoCPE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/descargadoDestinoCPE\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:DescargadoDestinoCPEReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:DescargadoDestinoCPEReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `descargadoDestinoCPE` → elemento `DescargadoDestinoCPEReq`"
+          },
+          "response": []
+        },
+        {
+          "name": "cerrarContingenciaCPE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"https://serviciosjava.afip.gob.ar/wscpe/cerrarContingenciaCPE\""
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:wsc=\"https://serviciosjava.afip.gob.ar/wscpe/\">\n  <soapenv:Header/>\n  <soapenv:Body>\n    <wsc:CerrarContingenciaCPEReq>\n      <auth>\n        <token>{{token}}</token>\n        <sign>{{sign}}</sign>\n        <cuitRepresentada>{{cuitRepresentada}}</cuitRepresentada>\n      </auth>\n      <!-- Completar <solicitud> según manual WSCPE v2.0.5 / WSDL -->\n      <solicitud>\n        <!-- TODO -->\n      </solicitud>\n    </wsc:CerrarContingenciaCPEReq>\n  </soapenv:Body>\n</soapenv:Envelope>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            },
+            "url": "{{wscpeBaseUrl}}",
+            "description": "WSCPE `cerrarContingenciaCPE` → elemento `CerrarContingenciaCPEReq`"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

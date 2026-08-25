@@ -11,6 +11,7 @@ venv/
 # Entorno y datos locales
 .env
 data/
+cms.b64
 *.db
 *.sqlite3
 

@@ -10,6 +10,7 @@ import os
 os.environ["AGRO360_DATABASE_URL"] = "sqlite+aiosqlite://"
 os.environ["AGRO360_SEED_AL_INICIAR"] = "false"
 os.environ["AGRO360_ENTORNO"] = "test"
+os.environ["AGRO360_CPE_PROVEEDOR"] = "simulado"
 
 import pytest
 from httpx import ASGITransport, AsyncClient

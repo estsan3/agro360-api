@@ -7,7 +7,8 @@ módulos:
   otros módulos escuchan sin acoplarse.
 """
 
-from datetime import date
+import base64
+from datetime import UTC, date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,19 +17,38 @@ from app.core.excepciones import RecursoNoEncontrado, ReglaDeNegocioViolada
 from app.modulos.catalogos.contrato import CatalogosLocal, ContratoCatalogos
 from app.modulos.despachos.bo import DespachoBO
 from app.modulos.despachos.dao import DespachoDAO
-from app.modulos.despachos.models import Despacho, TarifaNacional, Viaje
+from app.modulos.despachos.models import Despacho, TarifaNacional, Viaje, ViajeAdjunto
 from app.modulos.despachos.schemas import (
     ActualizarMetadatosDespachoRequest,
     ActualizarViajeRequest,
+    AsignarPorListaRequest,
     BuscarTransportistasRequest,
     CrearDespachoRequest,
     CrearViajeRequest,
     DespachoResponse,
     DuplicarDespachoRequest,
+    IniciarViajeRequest,
     ResolverTarifaResponse,
+    SubirAdjuntoViajeRequest,
     TarifaNacionalItem,
     TarifaNacionalResponse,
+    ViajeAdjuntoDetalleResponse,
+    ViajeAdjuntoResponse,
 )
+from app.modulos.lista_espera.contrato import ContratoListaEspera, ListaEsperaLocal
+
+
+def _texto_opcional(valor: str | None) -> str | None:
+    """Normaliza strings vacíos a None (RENSPA, turno, etc.)."""
+    if valor is None:
+        return None
+    limpio = valor.strip()
+    return limpio or None
+
+
+def _dominio_opcional(valor: str | None) -> str | None:
+    limpio = _texto_opcional(valor)
+    return limpio.upper() if limpio else None
 
 
 class DespachosService:
@@ -38,6 +58,7 @@ class DespachosService:
         self,
         sesion: AsyncSession,
         catalogos: ContratoCatalogos | None = None,
+        lista_espera: ContratoListaEspera | None = None,
     ) -> None:
         self._sesion = sesion
         self._dao = DespachoDAO(sesion)
@@ -45,6 +66,7 @@ class DespachosService:
         # El contrato es inyectable: en tests se pasa un fake; cuando
         # catálogos sea microservicio, se pasa el cliente HTTP.
         self._catalogos = catalogos or CatalogosLocal(sesion)
+        self._lista_espera = lista_espera or ListaEsperaLocal(sesion)
 
     # ------------------------------- Campañas -------------------------------
 
@@ -76,6 +98,8 @@ class DespachosService:
             fecha_llegada_estimada=fecha_llegada,
         )
         await self._aplicar_campos_comerciales(despacho, datos)
+        self._aplicar_campos_cpe(despacho, datos)
+        await self._heredar_renspa_campo(despacho)
         self._bo.validar_fechas(despacho)
 
         # Alta de los viajes iniciales: nacen en borrador junto con la campaña.
@@ -125,6 +149,8 @@ class DespachosService:
             datos.fecha_inicio, datos.fecha_llegada_estimada
         )
         await self._aplicar_campos_comerciales(despacho, datos)
+        self._aplicar_campos_cpe(despacho, datos)
+        await self._heredar_renspa_campo(despacho)
         self._bo.validar_fechas(despacho)
 
         despacho.viajes.clear()
@@ -186,6 +212,58 @@ class DespachosService:
         await self._sesion.commit()
         return DespachoResponse.model_validate(despacho)
 
+    async def editar_para_intencion_cpe(
+        self, despacho_id: str, datos: CrearDespachoRequest
+    ) -> DespachoResponse:
+        """Actualiza datos de campaña y viajes existentes sin cambiar sus IDs.
+
+        Usado al corregir una intención CPE pendiente/error: el front reenvía
+        el formulario completo y luego llama a reintentar la carta de porte.
+        """
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_edicion_para_intencion_cpe(despacho)
+        await self._validar_referencias(datos)
+
+        if not datos.viajes:
+            raise ReglaDeNegocioViolada(
+                "Debés incluir al menos el viaje asociado a la intención"
+            )
+        for datos_viaje in datos.viajes:
+            if not datos_viaje.id:
+                raise ReglaDeNegocioViolada(
+                    "Cada viaje debe incluir su id para no romper la intención CPE"
+                )
+
+        despacho.nombre = datos.nombre
+        despacho.productor_id = datos.productor_id
+        despacho.campo_id = datos.campo_id
+        despacho.origen = datos.origen
+        despacho.entrada_campo = datos.entrada_campo
+        despacho.material = datos.material
+        despacho.administrador_id = datos.administrador_id
+        despacho.vendedor_id = datos.vendedor_id
+        despacho.fecha_inicio = datos.fecha_inicio
+        despacho.fecha_llegada_estimada = self._resolver_fecha_llegada(
+            datos.fecha_inicio, datos.fecha_llegada_estimada
+        )
+        await self._aplicar_campos_comerciales(despacho, datos)
+        self._aplicar_campos_cpe(despacho, datos)
+        await self._heredar_renspa_campo(despacho)
+        self._bo.validar_fechas(despacho)
+
+        por_id = {viaje.id: viaje for viaje in despacho.viajes}
+        for datos_viaje in datos.viajes:
+            viaje = por_id.get(datos_viaje.id or "")
+            if viaje is None:
+                raise RecursoNoEncontrado(
+                    f"Viaje no encontrado en la campaña: {datos_viaje.id}"
+                )
+            await self._actualizar_viaje_para_intencion(viaje, datos_viaje)
+
+        await self._sesion.commit()
+        await self._sesion.refresh(despacho, attribute_names=["viajes"])
+        return DespachoResponse.model_validate(despacho)
+
     async def duplicar(
         self, despacho_id: str, datos: DuplicarDespachoRequest | None = None
     ) -> DespachoResponse:
@@ -215,6 +293,37 @@ class DespachosService:
             distancia_km=original.distancia_km,
             cuando=original.cuando,
             cuando_fecha=original.cuando_fecha,
+            cpe_habilitada=original.cpe_habilitada,
+            cpe_tipo=original.cpe_tipo,
+            cpe_sucursal=original.cpe_sucursal,
+            cpe_cosecha=original.cpe_cosecha,
+            cpe_cuit_solicitante=original.cpe_cuit_solicitante,
+            cpe_origen_cod_provincia=original.cpe_origen_cod_provincia,
+            cpe_origen_cod_localidad=original.cpe_origen_cod_localidad,
+            cpe_origen_planta=original.cpe_origen_planta,
+            cpe_nro_renspa=original.cpe_nro_renspa,
+            cpe_codigo_turno=original.cpe_codigo_turno,
+            cpe_hora_partida=original.cpe_hora_partida,
+            cpe_corresponde_retiro_productor=original.cpe_corresponde_retiro_productor,
+            cpe_es_solicitante_campo=original.cpe_es_solicitante_campo,
+            cpe_destino_cuit=original.cpe_destino_cuit,
+            cpe_destino_es_campo=original.cpe_destino_es_campo,
+            cpe_destino_cod_provincia=original.cpe_destino_cod_provincia,
+            cpe_destino_cod_localidad=original.cpe_destino_cod_localidad,
+            cpe_destino_planta=original.cpe_destino_planta,
+            cpe_peso_tara_kg_default=original.cpe_peso_tara_kg_default,
+            cpe_mercaderia_fumigada=original.cpe_mercaderia_fumigada,
+            cpe_cuit_pagador_flete=original.cpe_cuit_pagador_flete,
+            cpe_cuit_intermediario_flete=original.cpe_cuit_intermediario_flete,
+            cpe_cuit_remitente_comercial_vp=original.cpe_cuit_remitente_comercial_vp,
+            cpe_cuit_remitente_comercial_vs=original.cpe_cuit_remitente_comercial_vs,
+            cpe_cuit_mercado_a_termino=original.cpe_cuit_mercado_a_termino,
+            cpe_cuit_corredor_vp=original.cpe_cuit_corredor_vp,
+            cpe_cuit_corredor_vs=original.cpe_cuit_corredor_vs,
+            cpe_cuit_representante_entregador=original.cpe_cuit_representante_entregador,
+            cpe_cuit_representante_recibidor=original.cpe_cuit_representante_recibidor,
+            cpe_cuit_remitente_comercial_vs2=original.cpe_cuit_remitente_comercial_vs2,
+            cpe_cuit_remitente_comercial_productor=original.cpe_cuit_remitente_comercial_productor,
         )
         for viaje in original.viajes:
             copia.viajes.append(
@@ -225,6 +334,15 @@ class DespachosService:
                     destino=viaje.destino,
                     toneladas=viaje.toneladas,
                     observaciones=viaje.observaciones,
+                    cpe_destino_cuit=viaje.cpe_destino_cuit,
+                    cpe_destino_es_campo=viaje.cpe_destino_es_campo,
+                    cpe_destino_cod_provincia=viaje.cpe_destino_cod_provincia,
+                    cpe_destino_cod_localidad=viaje.cpe_destino_cod_localidad,
+                    cpe_destino_planta=viaje.cpe_destino_planta,
+                    cpe_peso_bruto_kg=viaje.cpe_peso_bruto_kg,
+                    cpe_peso_tara_kg=viaje.cpe_peso_tara_kg,
+                    cpe_codigo_turno=viaje.cpe_codigo_turno,
+                    cpe_dominio_acoplado=viaje.cpe_dominio_acoplado,
                     estado="borrador",
                     progreso=0,
                 )
@@ -247,12 +365,24 @@ class DespachosService:
         await self._sesion.commit()
         return DespachoResponse.model_validate(despacho)
 
-    async def iniciar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
+    async def iniciar_viaje(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        datos: IniciarViajeRequest | None = None,
+    ) -> DespachoResponse:
         """El viaje sale a la ruta: pasa a en_viaje."""
         despacho = await self._buscar_o_fallar(despacho_id)
         self._bo.validar_campaña_operable(despacho)
         viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
-        self._bo.validar_inicio_viaje(viaje)
+        checklist = datos or IniciarViajeRequest()
+        self._bo.validar_inicio_viaje(
+            viaje,
+            checklist_gasoil=checklist.checklist_gasoil,
+            checklist_efectivo=checklist.checklist_efectivo,
+        )
+        viaje.checklist_gasoil = checklist.checklist_gasoil
+        viaje.checklist_efectivo = checklist.checklist_efectivo
         self._bo.aplicar_estado_viaje(viaje, "en_viaje")
         await self._sesion.commit()
 
@@ -284,6 +414,15 @@ class DespachosService:
             destino=original.destino,
             toneladas=original.toneladas,
             observaciones=original.observaciones,
+            cpe_destino_cuit=original.cpe_destino_cuit,
+            cpe_destino_es_campo=original.cpe_destino_es_campo,
+            cpe_destino_cod_provincia=original.cpe_destino_cod_provincia,
+            cpe_destino_cod_localidad=original.cpe_destino_cod_localidad,
+            cpe_destino_planta=original.cpe_destino_planta,
+            cpe_peso_bruto_kg=original.cpe_peso_bruto_kg,
+            cpe_peso_tara_kg=original.cpe_peso_tara_kg,
+            cpe_codigo_turno=original.cpe_codigo_turno,
+            cpe_dominio_acoplado=original.cpe_dominio_acoplado,
             estado="borrador" if despacho.estado == "borrador" else "pendiente",
         )
         despacho.viajes.append(copia)
@@ -311,6 +450,7 @@ class DespachosService:
             raise RecursoNoEncontrado("Viaje no encontrado en esa campaña")
 
         if datos.chofer_id is not None:
+            self._bo.validar_reasignacion_chofer(viaje)
             await self._asignar_chofer(viaje, datos.chofer_id)
         if datos.observaciones is not None:
             viaje.observaciones = datos.observaciones
@@ -318,9 +458,14 @@ class DespachosService:
             viaje.progreso = datos.progreso
 
         estado_cambio_a_completado = False
+        estado_cambio_a_cancelado = False
         if datos.estado is not None and datos.estado != viaje.estado:
-            self._bo.aplicar_estado_viaje(viaje, datos.estado)
-            estado_cambio_a_completado = datos.estado == "completado"
+            if datos.estado == "cancelado":
+                self._bo.cancelar_viaje(viaje)
+                estado_cambio_a_cancelado = True
+            else:
+                self._bo.aplicar_estado_viaje(viaje, datos.estado)
+                estado_cambio_a_completado = datos.estado == "completado"
 
         await self._sesion.commit()
 
@@ -332,6 +477,17 @@ class DespachosService:
                     datos={"despacho_id": despacho.id, "viaje_id": viaje.id},
                 )
             )
+        elif estado_cambio_a_cancelado:
+            await bus_eventos.publicar(
+                EventoDominio(
+                    nombre="despachos.viaje.cancelado",
+                    datos={
+                        "despacho_id": despacho.id,
+                        "viaje_id": viaje.id,
+                        "chofer_id": viaje.chofer_id,
+                    },
+                )
+            )
         elif datos.estado == "retrasado":
             await bus_eventos.publicar(
                 EventoDominio(
@@ -340,6 +496,123 @@ class DespachosService:
                 )
             )
         return DespachoResponse.model_validate(despacho)
+
+    async def cancelar_viaje(self, despacho_id: str, viaje_id: str) -> DespachoResponse:
+        """Cancela un viaje (estado terminal cancelado)."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        self._bo.cancelar_viaje(viaje)
+        await self._sesion.commit()
+        await bus_eventos.publicar(
+            EventoDominio(
+                nombre="despachos.viaje.cancelado",
+                datos={
+                    "despacho_id": despacho.id,
+                    "viaje_id": viaje.id,
+                    "chofer_id": viaje.chofer_id,
+                },
+            )
+        )
+        return DespachoResponse.model_validate(despacho)
+
+    async def listar_adjuntos(
+        self, despacho_id: str, viaje_id: str
+    ) -> list[ViajeAdjuntoResponse]:
+        await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        filas = await self._dao.listar_adjuntos(viaje_id)
+        return [self._adjunto_response(a) for a in filas]
+
+    async def obtener_adjunto(
+        self, despacho_id: str, viaje_id: str, adjunto_id: str
+    ) -> ViajeAdjuntoDetalleResponse:
+        await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        adjunto = await self._dao.buscar_adjunto(viaje_id, adjunto_id)
+        if adjunto is None:
+            raise RecursoNoEncontrado("Adjunto no encontrado")
+        base = self._adjunto_response(adjunto)
+        return ViajeAdjuntoDetalleResponse(**base.model_dump(), data_url=adjunto.data_url)
+
+    async def subir_adjunto(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        datos: SubirAdjuntoViajeRequest,
+    ) -> ViajeAdjuntoResponse:
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        if not datos.data_url.startswith("data:"):
+            raise ReglaDeNegocioViolada("El archivo debe enviarse como data URL")
+        adjunto = ViajeAdjunto(
+            viaje_id=viaje_id,
+            tipo=datos.tipo,
+            nombre=datos.nombre.strip(),
+            mime=datos.mime,
+            data_url=datos.data_url,
+            creado_en=datetime.now(UTC).isoformat(),
+        )
+        await self._dao.guardar_adjunto(adjunto)
+        await self._sesion.commit()
+        return self._adjunto_response(adjunto)
+
+    async def eliminar_adjunto(
+        self, despacho_id: str, viaje_id: str, adjunto_id: str
+    ) -> None:
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        adjunto = await self._dao.buscar_adjunto(viaje_id, adjunto_id)
+        if adjunto is None:
+            raise RecursoNoEncontrado("Adjunto no encontrado")
+        await self._dao.eliminar_adjunto(adjunto)
+        await self._sesion.commit()
+
+    async def generar_ticket_gasoil(
+        self, despacho_id: str, viaje_id: str
+    ) -> ViajeAdjuntoResponse:
+        """Genera un ticket de gasoil interno y lo guarda como adjunto del viaje."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        texto = (
+            "TICKET DE GASOIL — Agro360\n"
+            f"Campaña: {despacho.nombre}\n"
+            f"Viaje: {viaje.id}\n"
+            f"Chofer: {viaje.chofer_nombre}\n"
+            f"Patente: {viaje.dominio}\n"
+            f"Origen: {despacho.origen}\n"
+            f"Destino: {viaje.destino}\n"
+            f"Material: {despacho.material}\n"
+            f"Toneladas: {viaje.toneladas:g}\n"
+            f"Emitido: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}\n"
+        )
+        data_url = (
+            "data:text/plain;base64,"
+            + base64.b64encode(texto.encode("utf-8")).decode("ascii")
+        )
+        adjunto = ViajeAdjunto(
+            viaje_id=viaje.id,
+            tipo="ticket_gasoil",
+            nombre=f"ticket-gasoil-{viaje.id}.txt",
+            mime="text/plain",
+            data_url=data_url,
+            creado_en=datetime.now(UTC).isoformat(),
+        )
+        await self._dao.guardar_adjunto(adjunto)
+        await self._sesion.commit()
+        return self._adjunto_response(adjunto)
+
+    @staticmethod
+    def _adjunto_response(adjunto: ViajeAdjunto) -> ViajeAdjuntoResponse:
+        return ViajeAdjuntoResponse(
+            id=adjunto.id,
+            viaje_id=adjunto.viaje_id,
+            tipo=adjunto.tipo,  # type: ignore[arg-type]
+            nombre=adjunto.nombre,
+            mime=adjunto.mime,
+            creado_en=adjunto.creado_en,
+        )
 
     # ----------------------- Tarifas / búsqueda ---------------------------
 
@@ -439,6 +712,109 @@ class DespachosService:
             )
         return DespachoResponse.model_validate(despacho)
 
+    async def asignar_por_lista(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        datos: AsignarPorListaRequest | None = None,
+    ) -> DespachoResponse:
+        """Flota propia primero; si no hay, ofrece al siguiente de la lista FIFO."""
+        req = datos or AsignarPorListaRequest()
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+        self._bo.validar_asignacion_por_lista(viaje)
+
+        await self._lista_espera.procesar_timeouts(req.empresa_id)
+
+        ocupados = await self._dao.listar_choferes_ocupados()
+        propias = await self._catalogos.listar_unidades_propias()
+        elegida = self._bo.elegir_flota_propia(
+            propias, ocupados, viaje.toneladas, req.tipo_unidad
+        )
+        if elegida is not None:
+            await self._asignar_chofer(viaje, elegida.chofer_id)
+            viaje.dominio = elegida.dominio
+            if viaje.estado in {"borrador", "en_busqueda_transportistas"}:
+                self._bo.aplicar_estado_viaje(viaje, "pendiente")
+            await self._sesion.commit()
+            return DespachoResponse.model_validate(despacho)
+
+        oferta = await self._lista_espera.ofertar_siguiente(
+            viaje.id,
+            viaje.toneladas,
+            tipo_unidad=req.tipo_unidad,
+            empresa_id=req.empresa_id,
+        )
+        if oferta.entrada_id is None:
+            raise ReglaDeNegocioViolada(
+                oferta.mensaje or "No hay flota propia ni unidades en lista de espera"
+            )
+        if viaje.estado == "borrador":
+            self._bo.aplicar_estado_viaje(viaje, "en_busqueda_transportistas")
+        elif viaje.estado == "pendiente" and not viaje.chofer_id:
+            self._bo.aplicar_estado_viaje(viaje, "en_busqueda_transportistas")
+        await self._sesion.commit()
+        return DespachoResponse.model_validate(despacho)
+
+    async def aceptar_oferta_lista(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        entrada_id: str,
+        *,
+        empresa_id: str = "default",
+    ) -> DespachoResponse:
+        """Acepta la oferta de la lista y asigna el chofer al viaje."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+
+        oferta = await self._lista_espera.obtener_oferta_viaje(empresa_id, viaje_id)
+        if oferta is None or oferta.id != entrada_id:
+            raise ReglaDeNegocioViolada(
+                "No hay oferta activa de esa entrada para este viaje"
+            )
+
+        # Mismas mutaciones en la sesión; el commit lo hace aceptar_oferta.
+        await self._asignar_chofer(viaje, oferta.chofer_id)
+        viaje.dominio = oferta.dominio
+        if viaje.estado != "pendiente":
+            self._bo.aplicar_estado_viaje(viaje, "pendiente")
+        await self._lista_espera.aceptar_oferta(entrada_id, viaje_id)
+        await self._sesion.refresh(despacho, attribute_names=["viajes"])
+        return DespachoResponse.model_validate(despacho)
+
+    async def rechazar_oferta_lista(
+        self,
+        despacho_id: str,
+        viaje_id: str,
+        *,
+        empresa_id: str = "default",
+        tipo_unidad: str | None = None,
+    ) -> DespachoResponse:
+        """Rechazo: unidad al fondo y se ofrece al siguiente apto."""
+        despacho = await self._buscar_o_fallar(despacho_id)
+        self._bo.validar_campaña_operable(despacho)
+        viaje = await self._buscar_viaje_o_fallar(despacho_id, viaje_id)
+
+        oferta = await self._lista_espera.obtener_oferta_viaje(empresa_id, viaje_id)
+        if oferta is None:
+            raise ReglaDeNegocioViolada("No hay oferta activa para este viaje")
+
+        await self._lista_espera.rechazar_oferta(oferta.id)
+        nueva = await self._lista_espera.ofertar_siguiente(
+            viaje.id,
+            viaje.toneladas,
+            tipo_unidad=tipo_unidad,
+            empresa_id=empresa_id,
+        )
+        if nueva.entrada_id is None and viaje.estado == "en_busqueda_transportistas":
+            # Sin más candidatos: vuelve a pendiente sin chofer.
+            viaje.estado = "pendiente"
+        await self._sesion.commit()
+        return DespachoResponse.model_validate(despacho)
+
     # ------------------------------- Privados -------------------------------
 
     async def _buscar_o_fallar(self, despacho_id: str) -> Despacho:
@@ -469,6 +845,27 @@ class DespachosService:
         """Si el front no informa llegada estimada, usa la fecha de inicio."""
         return fecha_llegada if fecha_llegada is not None else fecha_inicio
 
+    async def _actualizar_viaje_para_intencion(
+        self, viaje: Viaje, datos: CrearViajeRequest
+    ) -> None:
+        """Actualiza un viaje existente preservando id y estado operativo."""
+        viaje.destino = datos.destino
+        viaje.toneladas = datos.toneladas
+        viaje.observaciones = datos.observaciones
+        viaje.cpe_destino_cuit = datos.cpe_destino_cuit
+        viaje.cpe_destino_es_campo = datos.cpe_destino_es_campo
+        viaje.cpe_destino_cod_provincia = datos.cpe_destino_cod_provincia
+        viaje.cpe_destino_cod_localidad = datos.cpe_destino_cod_localidad
+        viaje.cpe_destino_planta = datos.cpe_destino_planta
+        viaje.cpe_peso_bruto_kg = datos.cpe_peso_bruto_kg
+        viaje.cpe_peso_tara_kg = datos.cpe_peso_tara_kg
+        viaje.cpe_codigo_turno = _texto_opcional(datos.cpe_codigo_turno)
+        viaje.cpe_dominio_acoplado = _dominio_opcional(datos.cpe_dominio_acoplado)
+        if datos.chofer_id:
+            await self._asignar_chofer(viaje, datos.chofer_id)
+        if datos.dominio:
+            viaje.dominio = datos.dominio.strip().upper()
+
     async def _construir_viaje(
         self,
         datos: CrearViajeRequest,
@@ -485,6 +882,15 @@ class DespachosService:
             toneladas=datos.toneladas,
             observaciones=datos.observaciones,
             estado=estado,
+            cpe_destino_cuit=datos.cpe_destino_cuit,
+            cpe_destino_es_campo=datos.cpe_destino_es_campo,
+            cpe_destino_cod_provincia=datos.cpe_destino_cod_provincia,
+            cpe_destino_cod_localidad=datos.cpe_destino_cod_localidad,
+            cpe_destino_planta=datos.cpe_destino_planta,
+            cpe_peso_bruto_kg=datos.cpe_peso_bruto_kg,
+            cpe_peso_tara_kg=datos.cpe_peso_tara_kg,
+            cpe_codigo_turno=_texto_opcional(datos.cpe_codigo_turno),
+            cpe_dominio_acoplado=_dominio_opcional(datos.cpe_dominio_acoplado),
         )
         if datos.chofer_id:
             await self._asignar_chofer(viaje, datos.chofer_id)
@@ -522,6 +928,50 @@ class DespachosService:
             despacho.tarifa_por_tn = precio
         else:
             despacho.tarifa_por_tn = datos.tarifa_por_tn
+
+    @staticmethod
+    def _aplicar_campos_cpe(despacho: Despacho, datos: CrearDespachoRequest) -> None:
+        despacho.cpe_habilitada = datos.cpe_habilitada
+        despacho.cpe_tipo = datos.cpe_tipo if datos.cpe_habilitada else None
+        despacho.cpe_sucursal = datos.cpe_sucursal if datos.cpe_habilitada else None
+        despacho.cpe_cosecha = datos.cpe_cosecha if datos.cpe_habilitada else None
+        despacho.cpe_cuit_solicitante = datos.cpe_cuit_solicitante
+        despacho.cpe_origen_cod_provincia = datos.cpe_origen_cod_provincia
+        despacho.cpe_origen_cod_localidad = datos.cpe_origen_cod_localidad
+        despacho.cpe_origen_planta = datos.cpe_origen_planta
+        despacho.cpe_nro_renspa = _texto_opcional(datos.cpe_nro_renspa)
+        despacho.cpe_codigo_turno = _texto_opcional(datos.cpe_codigo_turno)
+        despacho.cpe_hora_partida = _texto_opcional(datos.cpe_hora_partida)
+        despacho.cpe_corresponde_retiro_productor = datos.cpe_corresponde_retiro_productor
+        despacho.cpe_es_solicitante_campo = datos.cpe_es_solicitante_campo
+        despacho.cpe_destino_cuit = datos.cpe_destino_cuit
+        despacho.cpe_destino_es_campo = datos.cpe_destino_es_campo
+        despacho.cpe_destino_cod_provincia = datos.cpe_destino_cod_provincia
+        despacho.cpe_destino_cod_localidad = datos.cpe_destino_cod_localidad
+        despacho.cpe_destino_planta = datos.cpe_destino_planta
+        despacho.cpe_peso_tara_kg_default = datos.cpe_peso_tara_kg_default
+        despacho.cpe_mercaderia_fumigada = datos.cpe_mercaderia_fumigada
+        despacho.cpe_cuit_pagador_flete = datos.cpe_cuit_pagador_flete
+        despacho.cpe_cuit_intermediario_flete = datos.cpe_cuit_intermediario_flete
+        despacho.cpe_cuit_remitente_comercial_vp = datos.cpe_cuit_remitente_comercial_vp
+        despacho.cpe_cuit_remitente_comercial_vs = datos.cpe_cuit_remitente_comercial_vs
+        despacho.cpe_cuit_mercado_a_termino = datos.cpe_cuit_mercado_a_termino
+        despacho.cpe_cuit_corredor_vp = datos.cpe_cuit_corredor_vp
+        despacho.cpe_cuit_corredor_vs = datos.cpe_cuit_corredor_vs
+        despacho.cpe_cuit_representante_entregador = datos.cpe_cuit_representante_entregador
+        despacho.cpe_cuit_representante_recibidor = datos.cpe_cuit_representante_recibidor
+        despacho.cpe_cuit_remitente_comercial_vs2 = datos.cpe_cuit_remitente_comercial_vs2
+        despacho.cpe_cuit_remitente_comercial_productor = (
+            datos.cpe_cuit_remitente_comercial_productor
+        )
+
+    async def _heredar_renspa_campo(self, despacho: Despacho) -> None:
+        """Si el pedido no trae RENSPA, usa el del campo de catálogo."""
+        if despacho.cpe_nro_renspa:
+            return
+        renspa = await self._catalogos.obtener_nro_renspa_campo(despacho.campo_id)
+        if renspa:
+            despacho.cpe_nro_renspa = renspa
 
     async def _precio_tarifa_nacional(self, distancia_km: float) -> tuple[float, str]:
         filas = await self._dao.listar_tarifas_nacionales()

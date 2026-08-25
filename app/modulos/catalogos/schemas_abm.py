@@ -18,6 +18,7 @@ class CamionTransportistaAbm(BaseModel):
     marca: str = ""
     modelo: str = ""
     tipo: str = ""
+    capacidad_tn: float | None = None
     nro_chasis: str = ""
     nro_motor: str = ""
     foto_tarjeta_verde: ArchivoAdjuntoAbm | None = None
@@ -54,6 +55,7 @@ class TransportistaAbm(BaseModel):
     email: str = ""
     telefono: str = ""
     pagina_web: str = ""
+    es_flota_propia: bool = False
 
 
 class TransportistaDetalleAbm(TransportistaAbm):
@@ -69,6 +71,7 @@ class GuardarTransportistaAbm(BaseModel):
     email: str = Field(default="", max_length=120)
     telefono: str = Field(default="", max_length=40)
     pagina_web: str = Field(default="", max_length=255)
+    es_flota_propia: bool = False
 
 
 class GuardarChoferAbm(BaseModel):
@@ -92,10 +95,10 @@ class GuardarCamionAbm(BaseModel):
     marca: str = Field(default="", max_length=80)
     modelo: str = Field(default="", max_length=80)
     tipo: str = Field(default="", max_length=40)
+    capacidad_tn: float | None = Field(default=None, gt=0)
     nro_chasis: str = Field(default="", max_length=40)
     nro_motor: str = Field(default="", max_length=40)
     foto_tarjeta_verde: ArchivoAdjuntoAbm | None = None
-
 
 class CambiarActivoAbm(BaseModel):
     activo: bool
@@ -129,6 +132,7 @@ class CampoProductorAbm(BaseModel):
     longitud: float = 0
     contacto_nombre: str = ""
     contacto_telefono: str = ""
+    nro_renspa: str = ""
     puntos_entrada: list[PuntoEntradaAbm] = []
 
 
@@ -201,6 +205,7 @@ class GuardarCampoAbm(BaseModel):
     longitud: float = 0
     contacto_nombre: str = ""
     contacto_telefono: str = ""
+    nro_renspa: str = Field(default="", max_length=40)
     puntos_entrada: list[PuntoEntradaInputAbm] = []
 
 

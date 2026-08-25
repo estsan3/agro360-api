@@ -22,6 +22,7 @@ class ChoferResumen:
     nombre: str
     dominio: str
     transportista_id: str | None = None
+    camion_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,35 @@ class TransportistaResumen:
 
     id: str
     nombre: str
+    es_flota_propia: bool = False
+
+
+@dataclass(frozen=True)
+class UnidadFlotaResumen:
+    """Chofer + camión listos para despacho (propia o terceros)."""
+
+    transportista_id: str
+    transportista_nombre: str
+    es_flota_propia: bool
+    chofer_id: str
+    chofer_nombre: str
+    camion_id: str
+    dominio: str
+    capacidad_tn: float | None
+    tipo_unidad: str
+
+
+@dataclass(frozen=True)
+class ContextoCpeCatalogos:
+    """Datos de maestros necesarios para armar el payload AFIP de una CPE."""
+
+    productor_cuit: str | None
+    codigo_grano_afip: int | None
+    chofer_cuit: str | None
+    transportista_cuit: str | None
+    origen_latitud: float | None
+    origen_longitud: float | None
+    campo_nro_renspa: str | None
 
 
 class ContratoCatalogos(Protocol):
@@ -47,6 +77,31 @@ class ContratoCatalogos(Protocol):
 
     async def listar_transportistas_activos(self) -> list[TransportistaResumen]: ...
 
+    async def obtener_unidad(self, camion_id: str) -> UnidadFlotaResumen | None:
+        """Datos de compatibilidad de un camión (con chofer vinculado si hay)."""
+        ...
+
+    async def listar_unidades_propias(self) -> list[UnidadFlotaResumen]:
+        """Unidades de flota propia activas con chofer asignado al camión."""
+        ...
+
+    async def obtener_unidad_por_chofer_camion(
+        self, chofer_id: str, camion_id: str
+    ) -> UnidadFlotaResumen | None:
+        """Valida el trío chofer/camión/transportista para anotar en lista."""
+        ...
+
+    async def obtener_contexto_cpe(
+        self,
+        productor_id: str,
+        campo_id: str,
+        material_nombre: str,
+        chofer_id: str | None,
+        entrada_campo: str,
+    ) -> ContextoCpeCatalogos: ...
+
+    async def obtener_nro_renspa_campo(self, campo_id: str) -> str | None: ...
+
 
 class CatalogosLocal:
     """Implementación local del contrato (mismo proceso, misma base)."""
@@ -58,6 +113,12 @@ class CatalogosLocal:
         campo = await self._dao.buscar_campo(campo_id)
         return campo is not None and campo.productor_id == productor_id
 
+    async def obtener_nro_renspa_campo(self, campo_id: str) -> str | None:
+        campo = await self._dao.buscar_campo(campo_id)
+        if campo is None:
+            return None
+        return (campo.nro_renspa or "").strip() or None
+
     async def existe_material(self, nombre: str) -> bool:
         return await self._dao.buscar_material_por_nombre(nombre) is not None
 
@@ -66,17 +127,24 @@ class CatalogosLocal:
         if chofer is None:
             return None
         dominio = chofer.dominio or ""
-        if not dominio and chofer.transportista_id:
+        camion_id = chofer.camion_id
+        if camion_id:
+            camion = await self._dao.buscar_camion(camion_id)
+            if camion and camion.activo:
+                dominio = camion.dominio
+        elif chofer.transportista_id:
             transportista = await self._dao.buscar_transportista(chofer.transportista_id)
             if transportista and transportista.camiones:
                 activos = [c for c in transportista.camiones if c.activo]
                 if activos:
                     dominio = activos[0].dominio
+                    camion_id = activos[0].id
         return ChoferResumen(
             id=chofer.id,
             nombre=chofer.nombre,
             dominio=dominio,
             transportista_id=chofer.transportista_id,
+            camion_id=camion_id,
         )
 
     async def obtener_nombre_transportista(self, transportista_id: str) -> str | None:
@@ -85,4 +153,140 @@ class CatalogosLocal:
 
     async def listar_transportistas_activos(self) -> list[TransportistaResumen]:
         filas = await self._dao.listar_transportistas(solo_activos=True)
-        return [TransportistaResumen(id=t.id, nombre=t.nombre) for t in filas]
+        return [
+            TransportistaResumen(
+                id=t.id, nombre=t.nombre, es_flota_propia=bool(t.es_flota_propia)
+            )
+            for t in filas
+        ]
+
+    async def obtener_unidad(self, camion_id: str) -> UnidadFlotaResumen | None:
+        camion = await self._dao.buscar_camion(camion_id)
+        if camion is None or not camion.activo:
+            return None
+        transportista = await self._dao.buscar_transportista(camion.transportista_id)
+        if transportista is None or not transportista.activo:
+            return None
+        chofer = next(
+            (c for c in transportista.choferes if c.camion_id == camion.id and c.activo),
+            None,
+        )
+        if chofer is None:
+            return None
+        return UnidadFlotaResumen(
+            transportista_id=transportista.id,
+            transportista_nombre=transportista.nombre,
+            es_flota_propia=bool(transportista.es_flota_propia),
+            chofer_id=chofer.id,
+            chofer_nombre=chofer.nombre,
+            camion_id=camion.id,
+            dominio=camion.dominio,
+            capacidad_tn=camion.capacidad_tn,
+            tipo_unidad=camion.tipo_unidad or "tolva",
+        )
+
+    async def listar_unidades_propias(self) -> list[UnidadFlotaResumen]:
+        filas = await self._dao.listar_transportistas(solo_activos=True)
+        unidades: list[UnidadFlotaResumen] = []
+        for t in filas:
+            if not t.es_flota_propia:
+                continue
+            camiones_por_id = {c.id: c for c in t.camiones if c.activo}
+            for chofer in t.choferes:
+                if not chofer.activo or not chofer.camion_id:
+                    continue
+                camion = camiones_por_id.get(chofer.camion_id)
+                if camion is None:
+                    continue
+                unidades.append(
+                    UnidadFlotaResumen(
+                        transportista_id=t.id,
+                        transportista_nombre=t.nombre,
+                        es_flota_propia=True,
+                        chofer_id=chofer.id,
+                        chofer_nombre=chofer.nombre,
+                        camion_id=camion.id,
+                        dominio=camion.dominio,
+                        capacidad_tn=camion.capacidad_tn,
+                        tipo_unidad=camion.tipo_unidad or "tolva",
+                    )
+                )
+        return unidades
+
+    async def obtener_unidad_por_chofer_camion(
+        self, chofer_id: str, camion_id: str
+    ) -> UnidadFlotaResumen | None:
+        chofer = await self._dao.buscar_chofer(chofer_id)
+        camion = await self._dao.buscar_camion(camion_id)
+        if chofer is None or camion is None:
+            return None
+        if not chofer.activo or not camion.activo:
+            return None
+        if chofer.camion_id and chofer.camion_id != camion_id:
+            return None
+        if chofer.transportista_id != camion.transportista_id:
+            return None
+        transportista = await self._dao.buscar_transportista(camion.transportista_id)
+        if transportista is None or not transportista.activo:
+            return None
+        return UnidadFlotaResumen(
+            transportista_id=transportista.id,
+            transportista_nombre=transportista.nombre,
+            es_flota_propia=bool(transportista.es_flota_propia),
+            chofer_id=chofer.id,
+            chofer_nombre=chofer.nombre,
+            camion_id=camion.id,
+            dominio=camion.dominio,
+            capacidad_tn=camion.capacidad_tn,
+            tipo_unidad=camion.tipo_unidad or "tolva",
+        )
+
+    async def obtener_contexto_cpe(
+        self,
+        productor_id: str,
+        campo_id: str,
+        material_nombre: str,
+        chofer_id: str | None,
+        entrada_campo: str,
+    ) -> ContextoCpeCatalogos:
+        productor = await self._dao.buscar_productor(productor_id)
+        material = await self._dao.buscar_material_por_nombre(material_nombre)
+        campo = await self._dao.buscar_campo(campo_id)
+
+        latitud: float | None = None
+        longitud: float | None = None
+        if campo is not None:
+            puntos = list(campo.puntos_entrada or [])
+            elegido = None
+            for punto in puntos:
+                if punto.id == entrada_campo or punto.nombre == entrada_campo:
+                    elegido = punto
+                    break
+            if elegido is None and puntos:
+                elegido = sorted(puntos, key=lambda p: p.orden)[0]
+            if elegido is not None:
+                latitud = elegido.latitud
+                longitud = elegido.longitud
+
+        chofer_cuit: str | None = None
+        transportista_cuit: str | None = None
+        if chofer_id:
+            chofer = await self._dao.buscar_chofer(chofer_id)
+            if chofer is not None:
+                chofer_cuit = chofer.cuit
+                if chofer.transportista_id:
+                    transportista = await self._dao.buscar_transportista(
+                        chofer.transportista_id
+                    )
+                    if transportista is not None:
+                        transportista_cuit = transportista.cuit
+
+        return ContextoCpeCatalogos(
+            productor_cuit=productor.cuit if productor else None,
+            codigo_grano_afip=material.codigo_grano_afip if material else None,
+            chofer_cuit=chofer_cuit,
+            transportista_cuit=transportista_cuit,
+            origen_latitud=latitud,
+            origen_longitud=longitud,
+            campo_nro_renspa=campo.nro_renspa if campo else None,
+        )
